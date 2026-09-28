@@ -14,9 +14,10 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const exec = promisify(execFile);
-const sections = ['athlete', 'season', 'blocks', 'weeks', 'races', 'notes'];
-// Foundational context (zones, health, goals, race priorities) changes only with recorded athlete approval.
-export const protectedSections = ['athlete', 'season'];
+const sections = ['coach', 'athlete', 'season', 'blocks', 'weeks', 'races', 'notes'];
+// The coach handbook and foundational context (zones, health, goals, race priorities) change
+// only with recorded athlete approval.
+export const protectedSections = ['coach', 'athlete', 'season'];
 export const isProtected = (path: string) => protectedSections.includes(path.split('/')[0]!);
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -27,7 +28,7 @@ export class DataStore {
     private push = false,
   ) {}
   private async safePath(path: string) {
-    if (!/^(athlete|season|blocks|weeks|races|notes)\/[a-zA-Z0-9_-]+\.md$/.test(path))
+    if (!/^(coach|athlete|season|blocks|weeks|races|notes)\/[a-zA-Z0-9_-]+\.md$/.test(path))
       throw new Error('Use section/filename.md in an approved coaching directory.');
     const root = await realpath(this.root);
     const [section] = path.split('/');

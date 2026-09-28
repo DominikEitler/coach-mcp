@@ -74,8 +74,8 @@ The update tool is registered only when `ENABLE_DATA_WRITES=true`. The server al
 sends client instructions and read/write tool annotations; these guide the client but
 are not an approval mechanism.
 
-`get_coaching_context` defaults to `athlete/profile.md`, `athlete/zones.md` and
-`blocks/current.md` and accepts up to 12 documents. Each source reports its own
+`get_coaching_context` defaults to `coach/handbook.md`, `athlete/profile.md`,
+`athlete/zones.md` and `blocks/current.md` and accepts up to 12 documents. Each source reports its own
 availability. A missing document is a successful read with null content, so check
 the data as well as the availability flag.
 
@@ -101,17 +101,18 @@ missing. List and single-activity responses must be JSON arrays and objects.
 
 Import and verify the athlete's existing profile and plans in `coach-data` first.
 Commit the baseline there before enabling `ENABLE_DATA_WRITES=true`. Only Markdown
-inside the six documented sections is accessible. Symlinks, hard links, traversal,
+inside the seven documented sections (`coach`, `athlete`, `season`, `blocks`, `weeks`,
+`races`, `notes`) is accessible. Symlinks, hard links, traversal,
 files over 64 KiB, dirty repositories and stale revisions are rejected.
 
 Read a document first, then call `update_coaching_document` with its SHA-256 hash,
 the full agreed new content, and a reason. Use a null hash only for a new document.
 
-Documents in `athlete/` and `season/` are protected (FTP, zones, health, goals, race
-priorities). Updating them also requires `athlete_confirmation`: the athlete's explicit
+Documents in `coach/`, `athlete/` and `season/` are protected (the coach handbook, FTP,
+zones, health, goals, race priorities). Updating them also requires `athlete_confirmation`: the athlete's explicit
 approval of that specific change. It is recorded as an `Athlete-Confirmation:` commit
 trailer. The server cannot verify the confirmation; review protected changes with
-`git log --format='%h %s %(trailers:key=Athlete-Confirmation)' -- athlete season`.
+`git log --format='%h %s %(trailers:key=Athlete-Confirmation)' -- coach athlete season`.
 
 Each update acquires the `.coach-write-lock/` directory, validates the path, requires a
 clean working tree, optionally fetches and checks upstream, compares the revision,

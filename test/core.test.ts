@@ -81,6 +81,10 @@ await test('protected documents require a recorded athlete confirmation', async 
     /Protected/,
   );
   await assert.rejects(data.update('season/2026.md', '# Goals\n', null, 'New goals'), /Protected/);
+  await assert.rejects(
+    data.update('coach/handbook.md', '# Rules\n', null, 'New rules'),
+    /Protected/,
+  );
   assert.equal(await readFile(join(root, 'athlete/profile.md'), 'utf8'), '# Original\n');
   await data.update('athlete/profile.md', '# FTP 280\n', sha256, 'Raise FTP', 'Yes, set 280 W');
   assert.equal(
