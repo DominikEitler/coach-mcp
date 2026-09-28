@@ -7,10 +7,16 @@ services:
       TRANSPORT: http
       HOST: 0.0.0.0
       COACH_DATA_DIR: /data
+      GIT_SSH_COMMAND: ssh -F /ssh/config
     ports:
       - '127.0.0.1:3000:3000'
     volumes:
       - ../coach-data:/data
+      # Git push for document writes. Without these variables, empty files are mounted
+      # and pushes fail, which only matters when GIT_AUTO_PUSH=true.
+      - ./deploy/git-ssh-config:/ssh/config:ro
+      - ${COACH_DATA_DEPLOY_KEY:-/dev/null}:/ssh/deploy-key:ro
+      - ${GIT_KNOWN_HOSTS:-/dev/null}:/ssh/known_hosts:ro
     init: true
     logging:
       driver: json-file

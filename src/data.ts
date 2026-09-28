@@ -81,6 +81,63 @@ export class DataStore {
       await exec('git', ['-C', this.root, ...args], { timeout: 30000, maxBuffer: 1024 * 1024 })
     ).stdout.trim();
   }
+  private async isAncestor(commit: string, of: string) {
+    try {
+      await this.git('merge-base', '--is-ancestor', commit, of);
+      return true;
+    } catch (e) {
+      if ((e as { code?: unknown }).code === 1) return false;
+      throw e;
+    }
+  }
+  private async withLock<T>(fn: () => Promise<T>) {
+    const lock = join(this.root, '.coach-write-lock');
+    try {
+      await mkdir(lock);
+    } catch {
+      throw new Error(
+        'Another write is in progress, or a stale .coach-write-lock requires operator review.',
+      );
+    }
+    try {
+      return await fn();
+    } finally {
+      await rmdir(lock);
+    }
+  }
+  // GitHub is canonical: fast-forward to it, publish commits an earlier failed push left
+  // behind, and stop when both sides changed, which needs an operator. Never force or reset.
+  private async syncWithUpstream() {
+    if (await this.git('status', '--porcelain'))
+      throw new Error('Data repository must be clean before synchronizing.');
+    await this.git('fetch', 'origin');
+    const head = await this.git('rev-parse', 'HEAD');
+    const upstream = await this.git('rev-parse', '@{u}');
+    if (head === upstream) return;
+    if (await this.isAncestor(head, upstream)) {
+      await this.git('merge', '--ff-only', '@{u}');
+      return;
+    }
+    if (!(await this.isAncestor(upstream, head)))
+      throw new Error(
+        'Data checkout has diverged from its upstream; an operator must reconcile it.',
+      );
+    try {
+      await this.git('push', 'origin', 'HEAD');
+    } catch {
+      throw new Error('Earlier commits could not be pushed. Check upstream access.');
+    }
+  }
+  /** Bring the checkout in line with its upstream. Does nothing unless push is enabled. */
+  async sync() {
+    if (!this.push) return;
+    try {
+      await this.withLock(() => this.syncWithUpstream());
+    } catch (e) {
+      if (e instanceof Error && !('stderr' in e)) throw e;
+      throw new Error('Git operation failed. Check repository setup and upstream access.');
+    }
+  }
   async update(
     path: string,
     content: string,
@@ -94,25 +151,22 @@ export class DataStore {
         'Protected document: ask the athlete to explicitly approve this change and supply their confirmation.',
       );
     if (Buffer.byteLength(content) > 65536) throw new Error('Document exceeds 64 KiB.');
-    const lock = join(this.root, '.coach-write-lock');
-    try {
-      await mkdir(lock);
-    } catch {
-      throw new Error(
-        'Another write is in progress, or a stale .coach-write-lock requires operator review.',
-      );
-    }
+    return this.withLock(() => this.write(path, content, expected, reason, confirmation));
+  }
+  private async write(
+    path: string,
+    content: string,
+    expected: string | null,
+    reason: string,
+    confirmation?: string,
+  ) {
     let temp: string | undefined;
     let written = false;
     try {
       const file = await this.safePath(path);
       if (await this.git('status', '--porcelain'))
         throw new Error('Data repository must be clean before writing.');
-      if (this.push) {
-        await this.git('fetch', 'origin');
-        if ((await this.git('rev-parse', 'HEAD')) !== (await this.git('rev-parse', '@{u}')))
-          throw new Error('Data checkout must match its upstream; synchronize it before writing.');
-      }
+      if (this.push) await this.syncWithUpstream();
       const current = await this.read(path);
       if (current.sha256 !== expected)
         throw new Error('Document changed. Read it again before updating.');
@@ -147,7 +201,7 @@ export class DataStore {
             changed: true,
             synced: false,
             warning:
-              'Saved locally, but push failed. Operator must synchronize before the next write.',
+              'Saved locally, but push failed. The server retries on its next sync; check upstream access if this persists.',
           };
         }
       }
@@ -162,7 +216,6 @@ export class DataStore {
       throw new Error('Git operation failed. Check repository setup and upstream access.');
     } finally {
       if (temp) await unlink(temp).catch(() => {});
-      await rmdir(lock);
     }
   }
 }

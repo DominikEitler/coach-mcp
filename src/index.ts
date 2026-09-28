@@ -3,8 +3,20 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { configuration } from './config.js';
 import { createServer } from './server.js';
 import { createApp } from './http.js';
+import { DataStore } from './data.js';
 try {
   const config = configuration();
+  if (config.GIT_AUTO_PUSH) {
+    // Keep the checkout current with GitHub between writes, so edits made elsewhere
+    // appear in reads and don't block the next write.
+    const data = new DataStore(config.COACH_DATA_DIR, false, true);
+    const sync = () =>
+      data.sync().catch((e: unknown) => {
+        console.error(`Data sync failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+      });
+    void sync();
+    setInterval(() => void sync(), 5 * 60 * 1000).unref();
+  }
   if (config.TRANSPORT === 'stdio') {
     const server = createServer(config);
     await server.connect(new StdioServerTransport());

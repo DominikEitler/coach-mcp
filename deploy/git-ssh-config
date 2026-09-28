@@ -1,0 +1,9 @@
+# SSH configuration for Git inside the container (mounted by compose.yaml).
+# The alias matches the data checkout's remote, git@github-coach-data:....
+Host github-coach-data
+  HostName github.com
+  User git
+  IdentityFile /ssh/deploy-key
+  IdentitiesOnly yes
+  UserKnownHostsFile /ssh/known_hosts
+  StrictHostKeyChecking yes

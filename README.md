@@ -123,12 +123,18 @@ lock. The server commits as `Coach MCP <coach-mcp@localhost>` without changing G
 configuration. Do not concurrently edit the checkout outside this server.
 
 `GIT_AUTO_PUSH=false` keeps commits local. For a hosted checkout where GitHub is
-canonical, enable `GIT_AUTO_PUSH=true` and configure origin, upstream and a
-repository-scoped credential separately. Before writing, the server fetches and
-requires HEAD to match upstream. Push failures return `synced:false` and require
-operator recovery; never blindly retry or reset. A crash can leave a lock, dirty
-file or unpushed commit: inspect the repository before removing a stale lock.
-There is no automatic periodic pull; synchronize remote edits while writes are stopped.
+canonical, enable `GIT_AUTO_PUSH=true` with an `origin`, an upstream branch and a
+repository-scoped credential. The server then synchronizes with the upstream before each
+write and every 5 minutes:
+
+- behind the upstream (edits made elsewhere): fast-forward
+- ahead of it (an earlier push failed): push the pending commits
+- diverged (commits on both sides): stop and report; an operator reconciles the branches
+
+It never merges, rebases, resets or force-pushes. A failed push after a write returns
+`synced:false`; the commit stays local and the next sync retries it. Sync failures are
+logged as `Data sync failed: ...`. A crash can leave a lock, a dirty file or an unpushed
+commit: inspect the repository before removing a stale lock.
 
 ## HTTP and deployment
 
@@ -150,8 +156,10 @@ docker compose up -d --build
 Compose mounts the sibling `../coach-data` checkout at `/data` and publishes port 3000
 on host loopback only; `deploy/Caddyfile` proxies `coach.bananer.at` to it. The
 container runs as UID 1000, so the checkout must be readable (and writable if enabled)
-by that UID. No host credentials are mounted: Git push needs a scoped SSH key and
-verified `known_hosts` configured for the container. The VPS stack, DNS, provisioning
+by that UID. For Git push, `deploy/git-ssh-config` maps the checkout's remote alias
+`github-coach-data` to GitHub, and the deploy key and a verified `known_hosts` are mounted
+read-only from the host paths in `COACH_DATA_DEPLOY_KEY` and `GIT_KNOWN_HOSTS`. Without
+those variables the mounts are empty and pushes fail. The VPS stack, DNS, provisioning
 sequence and operations are documented in the parent directory's `README.md`.
 
 ## Code style
@@ -175,10 +183,10 @@ These checks run locally; no CI pipeline or Git hooks are installed.
 npm run check
 ```
 
-The nine tests use a temporary Git repository and mocked Intervals HTTP responses,
+The ten tests use a temporary Git repository and mocked Intervals HTTP responses,
 plus real MCP clients over in-memory, stdio and HTTP transports. They cover
 configuration, date validation, revisions and filesystem boundaries, concurrent and
-protected writes, Intervals requests and response trimming, and MCP discovery. They require no credentials.
+protected writes, upstream synchronization, Intervals requests and response trimming, and MCP discovery. They require no credentials.
 Live Intervals calls and VPS deployment must be verified after configuration.
 
 This first version intentionally exposes Intervals reads only. Planned workout

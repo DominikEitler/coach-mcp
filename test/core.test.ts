@@ -72,6 +72,68 @@ await test('concurrent writes cannot overwrite each other', async (t) => {
   ]);
   assert.equal(outcomes.filter((v) => v.status === 'fulfilled').length, 1);
 });
+await test('upstream sync fast-forwards, retries failed pushes and stops at divergence', async (t) => {
+  const { root, git } = await fixture(t);
+  const remote = await mkdtemp(join(tmpdir(), 'coach-remote-'));
+  const other = await mkdtemp(join(tmpdir(), 'coach-other-'));
+  t.after(() => rm(remote, { recursive: true, force: true }));
+  t.after(() => rm(other, { recursive: true, force: true }));
+  const branch = git('rev-parse', '--abbrev-ref', 'HEAD');
+  execFileSync('git', ['init', '-q', '--bare', '-b', branch, remote]);
+  git('remote', 'add', 'origin', remote);
+  git('push', '-q', '-u', 'origin', 'HEAD');
+  execFileSync('git', ['clone', '-q', remote, other]);
+  const elsewhere = async (file: string, text: string) => {
+    await mkdir(join(other, 'notes'), { recursive: true });
+    await writeFile(join(other, file), text);
+    execFileSync('git', ['-C', other, 'add', file]);
+    execFileSync('git', [
+      '-C',
+      other,
+      '-c',
+      'user.name=T',
+      '-c',
+      'user.email=t@l',
+      'commit',
+      '-qm',
+      file,
+    ]);
+    execFileSync('git', ['-C', other, 'push', '-q']);
+  };
+  const remoteHead = () =>
+    execFileSync('git', ['-C', remote, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const data = new DataStore(root, true, true);
+
+  // An edit made elsewhere is fast-forwarded before writing, and the write is pushed.
+  await elsewhere('notes/elsewhere.md', '# Edited on GitHub\n');
+  const note = await data.update('notes/coach.md', '# Coach note\n', null, 'Add coach note');
+  assert.equal(note.synced, true);
+  assert.equal(await readFile(join(root, 'notes/elsewhere.md'), 'utf8'), '# Edited on GitHub\n');
+  assert.equal(remoteHead(), git('rev-parse', 'HEAD'));
+
+  // A rejected push keeps the commit locally, and the next sync publishes it.
+  const hook = join(remote, 'hooks', 'pre-receive');
+  await writeFile(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  const saved = await data.update('notes/coach.md', '# Changed\n', note.sha256, 'Change note');
+  assert.equal(saved.synced, false);
+  assert.notEqual(remoteHead(), git('rev-parse', 'HEAD'));
+  await rm(hook);
+  await data.sync();
+  assert.equal(remoteHead(), git('rev-parse', 'HEAD'));
+
+  // Commits on both sides are never merged or overwritten automatically.
+  execFileSync('git', ['-C', other, 'pull', '-q']);
+  await elsewhere('notes/elsewhere.md', '# Edited again\n');
+  await writeFile(join(root, 'notes/local.md'), 'local\n');
+  git('add', 'notes/local.md');
+  git('-c', 'user.name=T', '-c', 'user.email=t@l', 'commit', '-qm', 'local');
+  await assert.rejects(data.sync(), /diverged/);
+  await assert.rejects(
+    data.update('notes/coach.md', '# Blocked\n', saved.sha256, 'Blocked change'),
+    /diverged/,
+  );
+  assert.equal(await readFile(join(root, 'notes/coach.md'), 'utf8'), '# Changed\n');
+});
 await test('protected documents require a recorded athlete confirmation', async (t) => {
   const { root, git } = await fixture(t);
   const data = new DataStore(root, true);
