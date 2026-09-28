@@ -1,3 +1,4 @@
+import { ZodError } from 'zod';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { configuration } from './config.js';
 import { createServer } from './server.js';
@@ -25,7 +26,16 @@ try {
         setTimeout(() => process.exit(1), 10000).unref();
       });
   }
-} catch {
-  console.error('Startup failed. Check environment configuration (see .env.example).');
+} catch (e) {
+  // Zod issues name the variable and rule, never the configured value of the secrets.
+  const detail =
+    e instanceof ZodError
+      ? e.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')
+      : e instanceof Error
+        ? e.message
+        : 'unknown error';
+  console.error(
+    `Startup failed: ${detail.replace(/\.$/, '')}. Check environment configuration (see .env.example).`,
+  );
   process.exitCode = 1;
 }
