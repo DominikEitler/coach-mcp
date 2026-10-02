@@ -1,9 +1,0 @@
-coach.bananer.at {
-    # Access log to the Caddy service journal; Authorization headers are redacted by default.
-    log
-    # The app rejects MCP bodies over 256 KiB; stop larger uploads at the proxy.
-    request_body {
-        max_size 1MB
-    }
-    reverse_proxy 127.0.0.1:3000
-}

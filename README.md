@@ -154,13 +154,14 @@ docker compose up -d --build
 ```
 
 Compose mounts the sibling `../coach-data` checkout at `/data` and publishes port 3000
-on host loopback only; `deploy/Caddyfile` proxies `coach.bananer.at` to it. The
-container runs as UID 1000, so the checkout must be readable (and writable if enabled)
+on host loopback only; a reverse proxy in front of it terminates HTTPS (on the VPS,
+Caddy proxies `coach.bananer.at` to it). The container runs as UID 1000, so the checkout must be readable (and writable if enabled)
 by that UID. For Git push, `deploy/git-ssh-config` maps the checkout's remote alias
 `github-coach-data` to GitHub, and the deploy key and a verified `known_hosts` are mounted
 read-only from the host paths in `COACH_DATA_DEPLOY_KEY` and `GIT_KNOWN_HOSTS`. Without
-those variables the mounts are empty and pushes fail. The VPS stack, DNS, provisioning
-sequence and operations are documented in the parent directory's `README.md`.
+those variables the mounts are empty and pushes fail. The coach deployment and its
+operations are documented in the parent directory's `README.md`; the VPS itself and its
+Caddy configuration are documented one level above that.
 
 ## Code style
 
