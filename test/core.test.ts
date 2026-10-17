@@ -238,7 +238,7 @@ await test('Intervals responses are reduced to coaching fields without losing va
   });
   await assert.rejects(api.activity('2'), /unexpected response/);
 });
-await test("planned workouts: only the coach's own, inside the window, rate limited", async () => {
+await test("calendar entries: only the coach's own, inside the window, rate limited", async () => {
   resetWriteLimit();
   type Event = Record<string, unknown> & { id: number };
   const calendar = new Map<number, Event>([
@@ -277,40 +277,71 @@ await test("planned workouts: only the coach's own, inside the window, rate limi
   const day = (offset: number) =>
     new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
   const run = {
+    category: 'WORKOUT' as const,
     date: day(3),
     type: 'Run' as const,
     name: 'Easy run',
     description: '- 40m Z2 Pace',
   };
-  await assert.rejects(new Intervals('k', '0', request).savePlannedWorkout(run), /disabled/);
+  await assert.rejects(new Intervals('k', '0', request).saveCalendarEntry(run), /disabled/);
   const api = new Intervals('k', '0', request, true);
-  const created = await api.savePlannedWorkout(run);
+  const created = await api.saveCalendarEntry(run);
   assert.equal(created.steps, 1);
   const first = posted[0] as Event;
   assert.equal(first.category, 'WORKOUT');
   assert.match(String(first.external_id), /^coach-mcp:/);
-  const moved = await api.savePlannedWorkout({ ...run, id: Number(created.id), date: day(4) });
+  const moved = await api.saveCalendarEntry({ ...run, id: Number(created.id), date: day(4) });
   assert.equal(moved.id, created.id);
   assert.equal(moved.date, day(4));
   assert.equal((posted[1] as Event).external_id, first.external_id);
-  const group = await api.savePlannedWorkout({
+  const group = await api.saveCalendarEntry({
     ...run,
     name: 'USI track',
     description: 'Coached session',
   });
   assert.equal(group.steps, 0);
   assert.ok('note' in group);
-  await assert.rejects(api.savePlannedWorkout({ ...run, id: 7 }), /not created by the coach/);
-  await assert.rejects(api.deletePlannedWorkout(7), /not created by the coach/);
+  await assert.rejects(api.saveCalendarEntry({ ...run, id: 7 }), /not created by the coach/);
+  await assert.rejects(api.deleteCalendarEntry(7), /not created by the coach/);
   assert.equal(calendar.get(7)?.name, 'Own entry');
-  await assert.rejects(api.savePlannedWorkout({ ...run, date: day(-3) }), /from today/);
-  await assert.rejects(api.savePlannedWorkout({ ...run, date: day(120) }), /from today/);
-  const removed = await api.deletePlannedWorkout(Number(created.id));
+  await assert.rejects(api.saveCalendarEntry({ ...run, date: day(-3) }), /from today/);
+  await assert.rejects(api.saveCalendarEntry({ ...run, date: day(600) }), /from today/);
+  const season = await api.saveCalendarEntry({
+    category: 'RACE_A',
+    type: 'Run',
+    date: day(300),
+    name: 'Vienna City Marathon',
+  });
+  assert.equal(season.category, 'RACE_A');
+  assert.equal(season.date, day(300));
+  await assert.rejects(
+    api.saveCalendarEntry({ category: 'RACE_B', date: day(10), name: 'No sport' }),
+    /sport type/,
+  );
+  const trip = await api.saveCalendarEntry({
+    category: 'HOLIDAY',
+    date: day(20),
+    end_date: day(22),
+    name: 'Trip to Graz',
+  });
+  assert.equal(trip.end_date, day(22));
+  const sent = posted.at(-1) as Event;
+  assert.equal(String(sent.end_date_local).slice(0, 10), day(23));
+  await assert.rejects(api.saveCalendarEntry({ ...run, end_date: day(5) }), /span several days/);
+  await assert.rejects(
+    api.saveCalendarEntry({ category: 'NOTE', date: day(9), end_date: day(8), name: 'Backwards' }),
+    /before date/,
+  );
+  await assert.rejects(
+    api.saveCalendarEntry({ category: 'PLAN' as never, date: day(9), name: 'Plan' }),
+    /cannot be written/,
+  );
+  const removed = await api.deleteCalendarEntry(Number(created.id));
   assert.equal(removed.deleted.id, created.id);
   assert.equal(calendar.has(Number(created.id)), false);
   resetWriteLimit();
-  for (let i = 0; i < 30; i++) await api.savePlannedWorkout(run);
-  await assert.rejects(api.savePlannedWorkout(run), /limit/);
+  for (let i = 0; i < 30; i++) await api.saveCalendarEntry(run);
+  await assert.rejects(api.saveCalendarEntry(run), /limit/);
   resetWriteLimit();
 });
 await test('calendar weeks and athlete-local dates', () => {
@@ -362,6 +393,13 @@ await test('week and day views match plan with activities', async (t) => {
       moving_time: 1800,
     },
     { id: 4, category: 'NOTE', name: 'Travel', start_date_local: '2026-01-07T00:00:00' },
+    {
+      id: 5,
+      category: 'HOLIDAY',
+      name: 'Trip',
+      start_date_local: '2026-01-07T00:00:00',
+      end_date_local: '2026-01-09T00:00:00',
+    },
   ];
   const activities = [
     {
@@ -424,6 +462,11 @@ await test('week and day views match plan with activities', async (t) => {
   assert.equal(wed!.planned[0]!.status, 'missed');
   assert.equal(wed!.notes[0]!.name, 'Travel');
   assert.equal(thu!.planned.length, 0);
+  assert.deepEqual(
+    thu!.notes.map((n) => n.name),
+    ['Trip'],
+  );
+  assert.equal(week.days[4]!.notes.length, 0);
   assert.equal(thu!.activities[0]!.matched, false);
   assert.equal(week.totals.run!.done_time, 5900);
   assert.equal(week.totals.run!.planned_time, 3600);
@@ -462,6 +505,14 @@ await test('push messages, ntfy request and schedule', async () => {
   );
   const rest = morning({ ...base, planned: [], activities: [], wellness: null });
   assert.equal(rest.body, 'Rest day');
+  const away = morning({
+    ...base,
+    planned: [],
+    activities: [],
+    wellness: null,
+    notes: [{ category: 'HOLIDAY', name: 'Trip to Graz' }],
+  });
+  assert.equal(away.body, 'Rest day\n🏖️ Trip to Graz');
   const pm = evening(workday)!;
   assert.equal(pm.title, 'Evening, Tue 27.10.');
   assert.equal(pm.tags, 'warning');

@@ -63,7 +63,7 @@ function rows(value: unknown) {
     throw new Error('Intervals.icu returned an unexpected response.');
   return value;
 }
-// Planned workouts the coach may create, change and delete carry this external_id prefix;
+// Calendar entries the coach may create, change and delete carry this external_id prefix;
 // everything else in the calendar is the athlete's and is never modified.
 export const coachPrefix = 'coach-mcp:';
 export const workoutTypes = [
@@ -77,15 +77,30 @@ export const workoutTypes = [
   'Walk',
   'Yoga',
 ] as const;
-export type PlannedWorkout = {
+export const entryCategories = [
+  'WORKOUT',
+  'RACE_A',
+  'RACE_B',
+  'RACE_C',
+  'NOTE',
+  'HOLIDAY',
+  'SICK',
+  'INJURED',
+] as const;
+const multiDay = new Set<string>(['NOTE', 'HOLIDAY', 'SICK', 'INJURED']);
+export type CalendarEntry = {
   id?: number;
+  category: (typeof entryCategories)[number];
   date: string;
-  type: (typeof workoutTypes)[number];
+  /** Last day, inclusive; only for notes, holidays, sick and injured days. */
+  end_date?: string;
+  type?: (typeof workoutTypes)[number];
   name: string;
-  description: string;
+  description?: string;
   indoor?: boolean;
 };
-const writeWindowDays = 92;
+// About 18 months: covers a whole season and still catches mistyped years.
+const writeWindowDays = 548;
 const writesPerHour = 30;
 // Shared by all requests in this process: HTTP mode builds a new client per request.
 const recentWrites: number[] = [];
@@ -105,14 +120,22 @@ function checkWindow(day: string, today = new Date()) {
   const offset = (Date.parse(day) - start) / 86400000;
   if (offset < 0 || offset > writeWindowDays + 1)
     throw new Error(
-      `Planned workouts can only be written from today to ${writeWindowDays} days ahead.`,
+      `Calendar entries can only be written from today to ${writeWindowDays} days ahead.`,
     );
 }
+const day = (value: unknown) => (typeof value === 'string' ? value.slice(0, 10) : null);
+const shift = (value: string, days: number) =>
+  new Date(Date.parse(value) + days * 86400000).toISOString().slice(0, 10);
 const summarize = (event: Row) => {
   const doc = event.workout_doc as { steps?: unknown[] } | null | undefined;
+  const start = day(event.start_date_local);
+  // Intervals stores an exclusive end; report the last day like the tool input.
+  const end = day(event.end_date_local);
   return {
     id: event.id,
-    date: typeof event.start_date_local === 'string' ? event.start_date_local.slice(0, 10) : null,
+    category: event.category,
+    date: start,
+    ...(start && end && end > shift(start, 1) && { end_date: shift(end, -1) }),
     type: event.type,
     name: event.name,
     moving_time: event.moving_time ?? null,
@@ -221,25 +244,36 @@ export class Intervals {
       );
     return event;
   }
-  /** Create or update a planned workout owned by the coach, then read it back. */
-  async savePlannedWorkout(workout: PlannedWorkout) {
+  /** Create or update a calendar entry owned by the coach, then read it back. */
+  async saveCalendarEntry(entry: CalendarEntry) {
     if (!this.writable) throw new Error('Intervals writes are disabled.');
-    checkWindow(workout.date);
+    if (!(entryCategories as readonly string[]).includes(entry.category))
+      throw new Error(`Category ${entry.category} cannot be written.`);
+    const needsType = entry.category === 'WORKOUT' || entry.category.startsWith('RACE_');
+    if (needsType && !entry.type) throw new Error('Workouts and races need a sport type.');
+    checkWindow(entry.date);
+    if (entry.end_date !== undefined) {
+      if (!multiDay.has(entry.category))
+        throw new Error('Only notes, holidays, sick and injured days can span several days.');
+      checkWindow(entry.end_date);
+      if (entry.end_date < entry.date) throw new Error('end_date must not be before date.');
+    }
     const externalId =
-      workout.id === undefined
+      entry.id === undefined
         ? coachPrefix + randomUUID()
-        : (await this.ownEvent(workout.id)).external_id;
+        : (await this.ownEvent(entry.id)).external_id;
     countWrite();
     const saved = rows(
       await this.send('POST', `athlete/${this.athlete}/events/bulk`, { upsert: 'true' }, [
         {
-          category: 'WORKOUT',
-          type: workout.type,
-          start_date_local: `${workout.date}T00:00:00`,
-          name: workout.name,
-          description: workout.description,
+          category: entry.category,
+          ...(entry.type && { type: entry.type }),
+          start_date_local: `${entry.date}T00:00:00`,
+          ...(entry.end_date && { end_date_local: `${shift(entry.end_date, 1)}T00:00:00` }),
+          name: entry.name,
+          description: entry.description ?? '',
           external_id: externalId,
-          ...(workout.indoor !== undefined && { indoor: workout.indoor }),
+          ...(entry.indoor !== undefined && { indoor: entry.indoor }),
         },
       ]),
     );
@@ -248,13 +282,14 @@ export class Intervals {
     const result = summarize(await this.event(id));
     return {
       ...result,
-      ...(result.steps === 0 && {
-        note: 'Intervals found no workout structure in the description. Expected for unstructured sessions such as group sessions; otherwise check the workout syntax.',
-      }),
+      ...(entry.category === 'WORKOUT' &&
+        result.steps === 0 && {
+          note: 'Intervals found no workout structure in the description. Expected for unstructured sessions such as group sessions; otherwise check the workout syntax.',
+        }),
     };
   }
-  /** Delete a planned workout owned by the coach and confirm it is gone. */
-  async deletePlannedWorkout(id: number) {
+  /** Delete a calendar entry owned by the coach and confirm it is gone. */
+  async deleteCalendarEntry(id: number) {
     if (!this.writable) throw new Error('Intervals writes are disabled.');
     const event = await this.ownEvent(id);
     countWrite();

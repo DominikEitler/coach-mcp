@@ -52,7 +52,7 @@ Example client configuration (replace paths with absolute paths on your machine)
 | `INTERVALS_ATHLETE_ID`    | `0`             | Athlete to query; `0` is the key owner                        |
 | `ENABLE_DATA_WRITES`      | `false`         | Register and enable document updates                          |
 | `GIT_AUTO_PUSH`           | `false`         | Fetch/check upstream and push document commits                |
-| `ENABLE_INTERVALS_WRITES` | `false`         | Register planned-workout writes to the Intervals calendar     |
+| `ENABLE_INTERVALS_WRITES` | `false`         | Register calendar writes (coach-created entries only)         |
 | `ATHLETE_TIMEZONE`        | `Europe/Vienna` | Time zone for "today" in `get_day` and `get_week`             |
 | `ENABLE_NOTIFICATIONS`    | `false`         | Morning, evening and Sunday pushes, and sync alerts, via ntfy |
 | `NTFY_URL`                | Unset           | ntfy server, e.g. `https://ntfy.bananer.at`                   |
@@ -68,22 +68,22 @@ when an MCP client launches the server from an unspecified working directory.
 
 ## Tools
 
-| Tool                       | Purpose                                                                     |
-| -------------------------- | --------------------------------------------------------------------------- |
-| `list_coaching_documents`  | Discover coaching Markdown                                                  |
-| `read_coaching_document`   | Read content and its revision hash                                          |
-| `get_recent_training`      | Completed activity summaries                                                |
-| `get_activity`             | Single activity including intervals                                         |
-| `get_wellness`             | Wellness and available load metrics                                         |
-| `get_calendar`             | Planned workouts and events                                                 |
-| `get_coaching_context`     | Combine selected documents and three API sources                            |
-| `get_day`                  | One day: planned vs done with status, activity detail, wellness             |
-| `get_week`                 | One calendar week: week file, block pointer, plan vs actual per day, totals |
-| `update_coaching_document` | Optional, agreed document update with Git commit                            |
-| `save_planned_workout`     | Optional: create or change an agreed planned workout in Intervals           |
-| `delete_planned_workout`   | Optional: delete a planned workout the coach created                        |
+| Tool                       | Purpose                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| `list_coaching_documents`  | Discover coaching Markdown                                                           |
+| `read_coaching_document`   | Read content and its revision hash                                                   |
+| `get_recent_training`      | Completed activity summaries                                                         |
+| `get_activity`             | Single activity including intervals                                                  |
+| `get_wellness`             | Wellness and available load metrics                                                  |
+| `get_calendar`             | Planned workouts and events                                                          |
+| `get_coaching_context`     | Combine selected documents and three API sources                                     |
+| `get_day`                  | One day: planned vs done with status, activity detail, wellness                      |
+| `get_week`                 | One calendar week: week file, block pointer, plan vs actual per day, totals          |
+| `update_coaching_document` | Optional, agreed document update with Git commit                                     |
+| `save_calendar_entry`      | Optional: create or change an agreed workout, race, note or holiday/sick/injured day |
+| `delete_calendar_entry`    | Optional: delete a calendar entry the coach created                                  |
 
-The update tool is registered only when `ENABLE_DATA_WRITES=true`, the planned-workout tools only when `ENABLE_INTERVALS_WRITES=true`. The server also
+The update tool is registered only when `ENABLE_DATA_WRITES=true`, the calendar tools only when `ENABLE_INTERVALS_WRITES=true`. The server also
 sends client instructions and read/write tool annotations; these guide the client but
 are not an approval mechanism.
 
@@ -196,22 +196,30 @@ sudo cp deploy/coach-monitor.service deploy/coach-monitor.timer /etc/systemd/sys
 sudo systemctl daemon-reload && sudo systemctl enable --now coach-monitor.timer
 ```
 
-## Planned workouts in Intervals
+## Calendar entries in Intervals
 
-With `ENABLE_INTERVALS_WRITES=true`, `save_planned_workout` and `delete_planned_workout`
-write to the athlete's Intervals.icu calendar with the personal API key, from where
-Intervals syncs planned workouts to Garmin if that is enabled in Intervals.
+With `ENABLE_INTERVALS_WRITES=true`, `save_calendar_entry` and `delete_calendar_entry`
+write to the athlete's Intervals.icu calendar with the personal API key. Planned workouts
+reach Garmin and Zwift through Intervals' own sync, if enabled there.
 
-- Workouts are written with `POST /athlete/0/events/bulk?upsert=true` and an `external_id`
-  starting with `coach-mcp:`. Changing a workout, including its date, reuses that id, so
-  it updates the entry instead of creating a duplicate.
-- Only events with that prefix can be changed or deleted; the athlete's own entries,
-  races and notes are refused.
-- Only category `WORKOUT`, dated from today to 92 days ahead (athlete-local dates).
+- **Categories:** `WORKOUT`, `RACE_A`, `RACE_B`, `RACE_C`, `NOTE`, `HOLIDAY`, `SICK`,
+  `INJURED`. Workouts and races need a sport type. Notes, holidays, sick and injured days
+  can span several days with `end_date`, the last day inclusive; Intervals stores the end
+  as the following day (exclusive), and the server converts both ways.
+- Entries are written with `POST /athlete/0/events/bulk?upsert=true` and an `external_id`
+  starting with `coach-mcp:`. Changing an entry, including its date, reuses that id, so it
+  updates the entry instead of creating a duplicate.
+- Only events with that prefix can be changed or deleted; the athlete's own entries are
+  refused.
+- Dated from today to 548 days (about 18 months) ahead, in athlete-local dates.
 - At most 30 Intervals writes per hour per server process.
-- Every write reads the event back and returns date, duration, load and the number of
-  structured steps; `steps: 0` means Intervals recognised no workout structure.
-- The description uses Intervals workout text (for example `- 10m 5:05-5:10/km Pace`).
+- Every write reads the event back and returns category, dates, duration, load and, for
+  workouts, the number of structured steps; `steps: 0` means Intervals recognised no
+  workout structure.
+- Workout descriptions use Intervals workout text (for example `- 10m 5:05-5:10/km Pace`).
+
+Intervals lists an event only on its start day. `get_day` and `get_week` therefore look
+back 45 days and show multi-day entries on every day they cover.
 
 Write access is covered by the
 [Intervals.icu API terms](https://forum.intervals.icu/t/intervals-icu-api-terms-and-conditions/114087)

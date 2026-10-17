@@ -45,6 +45,19 @@ const weekday = (value: string) =>
 const num = (value: unknown) => (typeof value === 'number' ? value : 0);
 const onDay = (row: Row, value: string) =>
   typeof row.start_date_local === 'string' && row.start_date_local.startsWith(value);
+// Intervals lists an event only on its start day and stores an exclusive end. Fetch events
+// from this many days earlier so multi-day notes, holidays and sick days show on every day.
+const lookBackDays = 45;
+const covers = (event: Row, value: string) => {
+  const start =
+    typeof event.start_date_local === 'string' ? event.start_date_local.slice(0, 10) : '';
+  if (!start) return false;
+  const end =
+    typeof event.end_date_local === 'string' && event.end_date_local.slice(0, 10) > start
+      ? event.end_date_local.slice(0, 10)
+      : iso(Date.parse(start) + day);
+  return start <= value && value < end;
+};
 
 function plannedEntry(event: Row) {
   const doc = event.workout_doc as { steps?: unknown[] } | null | undefined;
@@ -139,11 +152,15 @@ export class Coaching {
     date.parse(value);
     const today = this.today();
     const [events, activities, wellness] = await Promise.all([
-      settle(this.api.list('events', value, value) as Promise<Row[]>),
+      settle(
+        this.api.list('events', iso(Date.parse(value) - lookBackDays * day), value) as Promise<
+          Row[]
+        >,
+      ),
       settle(this.api.activities(value, value)),
       settle(this.api.wellness(value, value)),
     ]);
-    const plan = events.available ? events.data.filter((e) => onDay(e, value)) : [];
+    const plan = events.available ? events.data.filter((e) => covers(e, value)) : [];
     const done = activities.available ? activities.data : [];
     const detail = await Promise.all(
       done.slice(0, 3).map((a) => settle(this.api.activity(String(a.id)))),
@@ -170,7 +187,13 @@ export class Coaching {
     const week = isoWeek(value);
     const today = this.today();
     const [events, activities, wellness, document, block] = await Promise.all([
-      settle(this.api.list('events', week.monday, week.sunday) as Promise<Row[]>),
+      settle(
+        this.api.list(
+          'events',
+          iso(Date.parse(week.monday) - lookBackDays * day),
+          week.sunday,
+        ) as Promise<Row[]>,
+      ),
       settle(this.api.activities(week.monday, week.sunday)),
       settle(this.api.wellness(week.monday, week.sunday)),
       settle(this.data.read(`weeks/${week.label}.md`)),
@@ -183,7 +206,7 @@ export class Coaching {
       return matchDay(
         value,
         today,
-        plan.filter((e) => onDay(e, value)),
+        plan.filter((e) => covers(e, value)),
         done.filter((a) => onDay(a, value)),
       );
     });

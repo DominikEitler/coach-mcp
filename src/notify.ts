@@ -4,7 +4,13 @@ type Planned = { name?: unknown; type?: unknown; moving_time?: unknown; status?:
 type Activity = { type?: unknown; moving_time?: unknown; distance?: unknown; matched?: unknown };
 export type Message = { title: string; body: string; question: string; tags?: string };
 /** The parts of a get_day or get_week result the messages use. */
-export type DayView = { date: string; planned: unknown; activities: unknown; wellness: unknown };
+export type DayView = {
+  date: string;
+  planned: unknown;
+  activities: unknown;
+  wellness: unknown;
+  notes?: unknown;
+};
 export type WeekView = {
   week: string;
   dates: { monday: string; sunday: string };
@@ -30,6 +36,7 @@ const join = (...parts: string[]) => parts.filter(Boolean).join(' · ');
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value ? value : fallback;
 const marks: Record<string, string> = { done: '✓', shortened: '↘', missed: '✗', open: '✗' };
+const noteEmoji: Record<string, string> = { NOTE: '📝', HOLIDAY: '🏖️', SICK: '🤒', INJURED: '🩹' };
 /** Emoji for an Intervals sport type, shown at the start of each line. */
 export function sportEmoji(type: unknown) {
   const t = typeof type === 'string' ? type : '';
@@ -56,10 +63,16 @@ export function morning(day: DayView): Message {
     (p) =>
       `${sportEmoji(p.type)} ${join(text(p.name, text(p.type, 'Session')), minutes(p.moving_time))}`,
   );
+  const notes = (
+    Array.isArray(day.notes) ? (day.notes as { category?: unknown; name?: unknown }[]) : []
+  )
+    .filter((n) => typeof n.category === 'string' && n.category in noteEmoji)
+    .map((n) => `${noteEmoji[n.category as string]} ${text(n.name, 'Note')}`);
   return {
     title: `Today, ${label(day.date)}`,
     body: [
       ...(sessions.length ? sessions : ['Rest day']),
+      ...notes,
       sleep || rhr ? `😴 ${join(sleep, rhr)}` : '',
     ]
       .filter(Boolean)
