@@ -130,7 +130,9 @@ trailer. The server cannot verify the confirmation; review protected changes wit
 Each update acquires the `.coach-write-lock/` directory, validates the path, requires a
 clean working tree, optionally fetches and checks upstream, compares the revision,
 writes a temporary file and renames it into place, commits only that path and
-optionally pushes. An unchanged document returns `changed:false`.
+optionally pushes. At most 20 document changes per hour are accepted per server process,
+a brake for runaway or manipulated conversations; further updates are refused until the
+hour has passed. An unchanged document returns `changed:false`.
 Updates are atomic and serialized across server requests/processes using a directory
 lock. The server commits as `Coach MCP <coach-mcp@localhost>` without changing Git
 configuration. Do not concurrently edit the checkout outside this server.
@@ -273,10 +275,10 @@ These checks run locally; no CI pipeline or Git hooks are installed.
 npm run check
 ```
 
-The fourteen tests use a temporary Git repository and mocked Intervals HTTP responses,
+The fifteen tests use a temporary Git repository and mocked Intervals HTTP responses,
 plus real MCP clients over in-memory, stdio and HTTP transports. They cover
 configuration, date validation, revisions and filesystem boundaries, concurrent and
-protected writes, upstream synchronization, Intervals requests and response trimming,
+protected writes, the document write limit, upstream synchronization, Intervals requests and response trimming,
 planned-workout writes (ownership, date window, rate limit), calendar weeks, the day and
 week views, push messages and their schedule, and MCP discovery. They require no credentials.
 Live Intervals calls and VPS deployment must be verified after configuration.

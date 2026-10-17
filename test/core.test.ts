@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { configuration } from '../src/config.js';
-import { DataStore } from '../src/data.js';
+import { DataStore, resetCommitLimit } from '../src/data.js';
 import { Intervals, checkRange, resetWriteLimit } from '../src/intervals.js';
 import { createServer } from '../src/server.js';
 import { createApp } from '../src/http.js';
@@ -62,6 +62,17 @@ await test('data revisions, commits, conflicts and filesystem boundaries', async
   await assert.rejects(data.read('notes/link.md'), /non-linked/);
   await assert.rejects(data.update('notes/new.md', 'hello', null, 'New note'), /clean/);
   await assert.rejects(new DataStore(root).update(current.path, '', null, 'disabled'), /disabled/);
+});
+await test('document writes are limited to 20 commits per hour', async (t) => {
+  resetCommitLimit();
+  t.after(() => resetCommitLimit());
+  const { root } = await fixture(t);
+  const data = new DataStore(root, true);
+  let sha256: string | null = null;
+  for (let i = 0; i < 20; i++)
+    ({ sha256 } = await data.update('notes/log.md', `# Entry ${i}\n`, sha256, `Entry ${i}`));
+  await assert.rejects(data.update('notes/log.md', '# Too many\n', sha256, 'One more'), /limit/);
+  assert.equal(await readFile(join(root, 'notes/log.md'), 'utf8'), '# Entry 19\n');
 });
 await test('concurrent writes cannot overwrite each other', async (t) => {
   const { root } = await fixture(t);

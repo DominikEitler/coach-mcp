@@ -21,6 +21,20 @@ export const protectedSections = ['coach', 'athlete', 'season'];
 export const isProtected = (path: string) => protectedSections.includes(path.split('/')[0]!);
 export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT';
+// A brake for runaway or manipulated conversations: at most this many document commits per
+// hour, shared by all requests in the process (HTTP mode builds a store per request).
+const commitsPerHour = 20;
+const recentCommits: number[] = [];
+function checkCommitLimit(now = Date.now()) {
+  while (recentCommits.length && recentCommits[0]! < now - 3600000) recentCommits.shift();
+  if (recentCommits.length >= commitsPerHour)
+    throw new Error(
+      `Document write limit reached (${commitsPerHour} changes per hour). Try again later.`,
+    );
+}
+export function resetCommitLimit() {
+  recentCommits.length = 0;
+}
 export class DataStore {
   constructor(
     readonly root: string,
@@ -151,6 +165,7 @@ export class DataStore {
         'Protected document: ask the athlete to explicitly approve this change and supply their confirmation.',
       );
     if (Buffer.byteLength(content) > 65536) throw new Error('Document exceeds 64 KiB.');
+    checkCommitLimit();
     return this.withLock(() => this.write(path, content, expected, reason, confirmation));
   }
   private async write(
@@ -190,6 +205,7 @@ export class DataStore {
         path,
       );
       const commit = await this.git('rev-parse', 'HEAD');
+      recentCommits.push(Date.now());
       if (this.push) {
         try {
           await this.git('push', 'origin', 'HEAD');
