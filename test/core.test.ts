@@ -485,11 +485,24 @@ await test('push messages, ntfy request and schedule', async () => {
   });
   await notifier.send(am);
   const sent = requests[0]!;
-  assert.equal(sent.url, 'https://ntfy.example/coach');
+  assert.equal(sent.url, 'https://ntfy.example');
   assert.equal(sent.headers.Authorization, 'Bearer tk_test');
-  assert.equal(decodeURIComponent(sent.headers.Title!), 'Today, Tue 27.10.');
-  assert.equal(sent.headers.Click, 'https://claude.ai/new?q=What%27s%20on%20today%3F');
-  assert.match(sent.headers.Actions!, /view, Intervals, https:\/\/intervals\.icu\/$/);
+  const json = JSON.parse(sent.body) as {
+    topic: string;
+    title: string;
+    message: string;
+    click: string;
+    actions: { label: string; url: string }[];
+  };
+  assert.equal(json.topic, 'coach');
+  assert.equal(json.title, 'Today, Tue 27.10.');
+  assert.equal(json.message, am.body);
+  assert.equal(new URL(json.click).searchParams.get('q'), "What's on today?");
+  assert.deepEqual(
+    json.actions.map((a) => a.label),
+    ['Discuss', 'Intervals'],
+  );
+  assert.equal(json.actions[1]!.url, 'https://intervals.icu/');
 
   const pushed: Message[] = [];
   const fakeCoaching = {

@@ -97,23 +97,27 @@ export class Notifier {
     private token: string,
     private request: typeof fetch = fetch,
   ) {}
-  /** Publish to ntfy; the tap opens Claude with the message's question. */
+  /**
+   * Publish to ntfy as JSON (title and text stay plain UTF-8; headers would need
+   * encoding). The tap opens Claude with the message's question.
+   */
   async send(message: Message, priority?: 'high') {
-    // Apostrophes are escaped too: the question also ends up in the Actions header.
-    const question = encodeURIComponent(message.question).replace(/'/g, '%27');
-    const claude = `https://claude.ai/new?q=${question}`;
-    const response = await this.request(`${this.url.replace(/\/$/, '')}/${this.topic}`, {
+    const claude = `https://claude.ai/new?q=${encodeURIComponent(message.question)}`;
+    const response = await this.request(this.url.replace(/\/$/, ''), {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        Title: encodeURIComponent(message.title),
-        'X-Encoding-Title': 'url',
-        Click: claude,
-        Actions: `view, Discuss, ${claude}; view, Intervals, https://intervals.icu/`,
-        ...(message.tags && { Tags: message.tags }),
-        ...(priority && { Priority: priority }),
-      },
-      body: message.body,
+      headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: this.topic,
+        title: message.title,
+        message: message.body,
+        click: claude,
+        actions: [
+          { action: 'view', label: 'Discuss', url: claude },
+          { action: 'view', label: 'Intervals', url: 'https://intervals.icu/' },
+        ],
+        ...(message.tags && { tags: message.tags.split(',') }),
+        ...(priority && { priority: 4 }),
+      }),
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`ntfy returned HTTP ${response.status}.`);
