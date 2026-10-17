@@ -40,20 +40,27 @@ Example client configuration (replace paths with absolute paths on your machine)
 
 ## Configuration
 
-| Variable                  | Default         | Purpose                                                   |
-| ------------------------- | --------------- | --------------------------------------------------------- |
-| `TRANSPORT`               | `stdio`         | Choose `stdio` or `http`                                  |
-| `HOST`                    | `127.0.0.1`     | HTTP bind address                                         |
-| `PORT`                    | `3000`          | HTTP port                                                 |
-| `MCP_TOKEN`               | Unset           | Required for HTTP, at least 32 characters                 |
-| `PUBLIC_URL`              | Unset           | HTTPS public URL used for Host/Origin validation          |
-| `COACH_DATA_DIR`          | `../coach-data` | Data checkout, relative to process working directory      |
-| `INTERVALS_API_KEY`       | Unset           | Personal Intervals API key                                |
-| `INTERVALS_ATHLETE_ID`    | `0`             | Athlete to query; `0` is the key owner                    |
-| `ENABLE_DATA_WRITES`      | `false`         | Register and enable document updates                      |
-| `GIT_AUTO_PUSH`           | `false`         | Fetch/check upstream and push document commits            |
-| `ENABLE_INTERVALS_WRITES` | `false`         | Register planned-workout writes to the Intervals calendar |
-| `ATHLETE_TIMEZONE`        | `Europe/Vienna` | Time zone for "today" in `get_day` and `get_week`         |
+| Variable                  | Default         | Purpose                                                       |
+| ------------------------- | --------------- | ------------------------------------------------------------- |
+| `TRANSPORT`               | `stdio`         | Choose `stdio` or `http`                                      |
+| `HOST`                    | `127.0.0.1`     | HTTP bind address                                             |
+| `PORT`                    | `3000`          | HTTP port                                                     |
+| `MCP_TOKEN`               | Unset           | Required for HTTP, at least 32 characters                     |
+| `PUBLIC_URL`              | Unset           | HTTPS public URL used for Host/Origin validation              |
+| `COACH_DATA_DIR`          | `../coach-data` | Data checkout, relative to process working directory          |
+| `INTERVALS_API_KEY`       | Unset           | Personal Intervals API key                                    |
+| `INTERVALS_ATHLETE_ID`    | `0`             | Athlete to query; `0` is the key owner                        |
+| `ENABLE_DATA_WRITES`      | `false`         | Register and enable document updates                          |
+| `GIT_AUTO_PUSH`           | `false`         | Fetch/check upstream and push document commits                |
+| `ENABLE_INTERVALS_WRITES` | `false`         | Register planned-workout writes to the Intervals calendar     |
+| `ATHLETE_TIMEZONE`        | `Europe/Vienna` | Time zone for "today" in `get_day` and `get_week`             |
+| `ENABLE_NOTIFICATIONS`    | `false`         | Morning, evening and Sunday pushes, and sync alerts, via ntfy |
+| `NTFY_URL`                | Unset           | ntfy server, e.g. `https://ntfy.bananer.at`                   |
+| `NTFY_TOPIC`              | `coach`         | ntfy topic                                                    |
+| `NTFY_TOKEN`              | Unset           | Token of a write-only ntfy user for the topic                 |
+| `NOTIFY_MORNING`          | `07:00`         | Morning push (athlete time zone)                              |
+| `NOTIFY_EVENING`          | `21:00`         | Evening push                                                  |
+| `NOTIFY_WEEKLY`           | `18:00`         | Sunday planning reminder                                      |
 
 Boolean flags accept only literal `true` or `false`. Use an absolute `COACH_DATA_DIR`
 when an MCP client launches the server from an unspecified working directory.
@@ -158,6 +165,37 @@ questions take one call. They default to today and the current calendar week (KW
   sport (planned and done time and load) and daily wellness. Each source reports its own
   availability.
 
+## Notifications and monitoring
+
+With `ENABLE_NOTIFICATIONS=true`, the server pushes to ntfy, built from Intervals data
+without any AI:
+
+- **Morning** (`NOTIFY_MORNING`): today's planned sessions from the calendar with planned
+  duration, or "Rest day", plus last night's sleep and resting HR.
+- **Evening** (`NOTIFY_EVENING`): plan versus actual (✓ done, ↘ shortened, ✗ not recorded,
+  - unplanned activity). Skipped on a rest day without activity.
+- **Sunday** (`NOTIFY_WEEKLY`): a reminder only when next week has nothing in the calendar.
+- **Data sync:** one high-priority push when the GitHub sync starts failing and one when it
+  recovers.
+
+Tapping a push opens Claude with a prefilled question (`claude.ai/new?q=...`); the buttons
+open Claude or Intervals. Each push is sent once per day while the process runs. To send one
+immediately, for example after changing the setup:
+`docker compose exec coach node dist/notify-now.js morning` (or `evening`, `weekly`).
+
+`deploy/monitor.sh` runs outside the container every 5 minutes through
+`deploy/coach-monitor.service` and `.timer`, so it also reports when the container is down.
+It checks container health, `https://coach.bananer.at/healthz`, a stale write lock,
+uncommitted, unpushed or diverged commits in `coach-data`, certificate expiry (under 14
+days) and disk usage (85 % or more). A problem counts once it is seen in two consecutive
+runs; it pushes once when a problem appears and once when it clears, with the token from
+`.env`. Install it once on the VPS:
+
+```sh
+sudo cp deploy/coach-monitor.service deploy/coach-monitor.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now coach-monitor.timer
+```
+
 ## Planned workouts in Intervals
 
 With `ENABLE_INTERVALS_WRITES=true`, `save_planned_workout` and `delete_planned_workout`
@@ -227,12 +265,12 @@ These checks run locally; no CI pipeline or Git hooks are installed.
 npm run check
 ```
 
-The thirteen tests use a temporary Git repository and mocked Intervals HTTP responses,
+The fourteen tests use a temporary Git repository and mocked Intervals HTTP responses,
 plus real MCP clients over in-memory, stdio and HTTP transports. They cover
 configuration, date validation, revisions and filesystem boundaries, concurrent and
 protected writes, upstream synchronization, Intervals requests and response trimming,
-planned-workout writes (ownership, date window, rate limit), calendar weeks and the day
-and week views, and MCP discovery. They require no credentials.
+planned-workout writes (ownership, date window, rate limit), calendar weeks, the day and
+week views, push messages and their schedule, and MCP discovery. They require no credentials.
 Live Intervals calls and VPS deployment must be verified after configuration.
 
 Intervals writes are limited to planned workouts the coach created. OAuth login,

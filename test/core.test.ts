@@ -11,6 +11,7 @@ import { Intervals, checkRange, resetWriteLimit } from '../src/intervals.js';
 import { createServer } from '../src/server.js';
 import { createApp } from '../src/http.js';
 import { Coaching, isoWeek, localDate } from '../src/coaching.js';
+import { Notifier, evening, morning, startSchedule, weekly, type Message } from '../src/notify.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -432,6 +433,88 @@ await test('week and day views match plan with activities', async (t) => {
   assert.equal((monday.planned as { status: string }[])[0]!.status, 'done');
   const activity = (monday.activities as { detail?: { icu_intervals: unknown[] } }[])[0]!;
   assert.equal(activity.detail?.icu_intervals.length, 1);
+});
+await test('push messages, ntfy request and schedule', async () => {
+  const base = {
+    date: '2026-10-27',
+    weekday: 'Tuesday',
+    today: '2026-10-27',
+    week: '2026-KW44',
+    notes: [],
+  };
+  const workday = {
+    ...base,
+    planned: [
+      { name: 'Easy run', type: 'Run', moving_time: 2700, status: 'done' },
+      { name: 'USI cycling', type: 'Ride', moving_time: 7200, status: 'open' },
+    ],
+    activities: [
+      { type: 'Run', moving_time: 2800, distance: 8200, matched: true },
+      { type: 'Swim', moving_time: 1800, distance: 1500, matched: false },
+    ],
+    wellness: { sleepSecs: 25920, restingHR: 46 },
+  };
+  const am = morning(workday);
+  assert.equal(am.title, 'Today, Tue 27.10.');
+  assert.equal(am.body, '• Easy run · 45 min\n• USI cycling · 120 min\nSleep 7:12 · resting HR 46');
+  const rest = morning({ ...base, planned: [], activities: [], wellness: null });
+  assert.equal(rest.body, 'Rest day');
+  const pm = evening(workday)!;
+  assert.match(pm.title, /not everything done/);
+  assert.equal(
+    pm.body,
+    '✓ Easy run · done\n✗ USI cycling · not recorded\n+ Swim · 1,5 km · 30 min',
+  );
+  assert.equal(evening({ ...base, planned: [], activities: [], wellness: null }), null);
+  const emptyWeek = {
+    week: '2026-KW45',
+    dates: { monday: '2026-11-02', sunday: '2026-11-08' },
+    days: [{ planned: [] }],
+  };
+  assert.equal(weekly(emptyWeek)!.title, 'KW45 is not planned yet');
+  assert.equal(weekly({ ...emptyWeek, days: [{ planned: [{}] }] }), null);
+
+  const requests: { url: string; headers: Record<string, string>; body: string }[] = [];
+  const notifier = new Notifier('https://ntfy.example/', 'coach', 'tk_test', (input, init) => {
+    requests.push({
+      url: input instanceof Request ? input.url : input.toString(),
+      headers: init?.headers as Record<string, string>,
+      body: typeof init?.body === 'string' ? init.body : '',
+    });
+    return Promise.resolve(new Response('{}'));
+  });
+  await notifier.send(am);
+  const sent = requests[0]!;
+  assert.equal(sent.url, 'https://ntfy.example/coach');
+  assert.equal(sent.headers.Authorization, 'Bearer tk_test');
+  assert.equal(decodeURIComponent(sent.headers.Title!), 'Today, Tue 27.10.');
+  assert.equal(sent.headers.Click, 'https://claude.ai/new?q=What%27s%20on%20today%3F');
+  assert.match(sent.headers.Actions!, /view, Intervals, https:\/\/intervals\.icu\/$/);
+
+  const pushed: Message[] = [];
+  const fakeCoaching = {
+    day: () => Promise.resolve(workday),
+    week: () => Promise.resolve(emptyWeek),
+  } as unknown as Coaching;
+  const fakeNotifier = {
+    send: (m: Message) => (pushed.push(m), Promise.resolve()),
+  } as unknown as Notifier;
+  const schedule = startSchedule(fakeCoaching, fakeNotifier, 'Europe/Vienna', {
+    morning: '07:00',
+    evening: '21:00',
+    weekly: '18:00',
+  });
+  schedule.stop();
+  await schedule.tick(new Date('2026-10-27T06:00:10Z')); // 07:00 in Vienna (CET)
+  await schedule.tick(new Date('2026-10-27T06:00:40Z'));
+  await schedule.tick(new Date('2026-10-27T12:00:00Z'));
+  assert.deepEqual(
+    pushed.map((m) => m.title),
+    ['Today, Tue 27.10.'],
+  );
+  await schedule.tick(new Date('2026-11-01T17:00:00Z')); // Sunday 18:00 in Vienna
+  assert.equal(pushed.at(-1)!.title, 'KW45 is not planned yet');
+  assert.throws(() => configuration({ ENABLE_NOTIFICATIONS: 'true' }), /NTFY_URL/);
 });
 await test('MCP discovery, tool errors and partial context via real SDK client', async (t) => {
   const { root } = await fixture(t);

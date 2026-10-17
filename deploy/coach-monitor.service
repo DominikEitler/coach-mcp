@@ -1,0 +1,8 @@
+[Unit]
+Description=Coach VPS monitor (pushes problems to ntfy)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=dominik
+ExecStart=/home/dominik/coach/coach-mcp/deploy/monitor.sh
