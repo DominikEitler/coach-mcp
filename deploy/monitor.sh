@@ -61,8 +61,8 @@ push() {
     -H "Authorization: Bearer $token" -H "Title: $1" -H "Priority: $2" -H "Tags: $3" -d "$4"
 }
 ok=1
-if [ -n "$new" ]; then push "Coach server problem" high rotating_light "$new" || ok=0; fi
-if [ -n "$cleared" ]; then push "Coach server recovered" default white_check_mark "Resolved: $cleared" || ok=0; fi
+if [ -n "$new" ]; then push "Server problem" high rotating_light "Coach server: $new" || ok=0; fi
+if [ -n "$cleared" ]; then push "Server recovered" default white_check_mark "Coach server resolved: $cleared" || ok=0; fi
 # Keep the old confirmed set if a push failed, so the next run tries again.
 [ "$ok" = 1 ] && mv "$state/next_confirmed" "$state/confirmed"
 mv "$state/current" "$state/previous"

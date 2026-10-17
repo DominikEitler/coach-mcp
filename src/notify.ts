@@ -87,7 +87,8 @@ export function evening(day: DayView): Message | null {
   ];
   const missed = planned.some((p) => p.status === 'open' || p.status === 'missed');
   return {
-    title: `Today, ${label(day.date)}: ${missed ? 'not everything done' : 'done'}`,
+    // Titles stay under about 25 characters (iPhone); the tag emoji shows the status.
+    title: `Evening, ${label(day.date)}`,
     body: lines.join('\n'),
     question: 'How did today go?',
     tags: missed ? 'warning' : 'white_check_mark',
@@ -100,7 +101,7 @@ export function weekly(next: WeekView): Message | null {
   if (planned > 0) return null;
   const kw = next.week.split('-')[1] ?? next.week;
   return {
-    title: `${kw} is not planned yet`,
+    title: `${kw} not planned yet`,
     body: `Nothing in the calendar for ${label(next.dates.monday)}–${label(next.dates.sunday)}. Time for the weekly planning?`,
     question: `Review this week and plan ${kw}.`,
     tags: 'spiral_calendar',

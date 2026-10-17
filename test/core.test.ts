@@ -463,7 +463,8 @@ await test('push messages, ntfy request and schedule', async () => {
   const rest = morning({ ...base, planned: [], activities: [], wellness: null });
   assert.equal(rest.body, 'Rest day');
   const pm = evening(workday)!;
-  assert.match(pm.title, /not everything done/);
+  assert.equal(pm.title, 'Evening, Tue 27.10.');
+  assert.equal(pm.tags, 'warning');
   assert.equal(
     pm.body,
     '🏃 ✓ Easy run · done\n🚴 ✗ USI cycling · not recorded\n🏊 + Swim · 1,5 km · 30 min',
@@ -474,7 +475,7 @@ await test('push messages, ntfy request and schedule', async () => {
     dates: { monday: '2026-11-02', sunday: '2026-11-08' },
     days: [{ planned: [] }],
   };
-  assert.equal(weekly(emptyWeek)!.title, 'KW45 is not planned yet');
+  assert.equal(weekly(emptyWeek)!.title, 'KW45 not planned yet');
   assert.equal(weekly({ ...emptyWeek, days: [{ planned: [{}] }] }), null);
 
   const requests: { url: string; headers: Record<string, string>; body: string }[] = [];
@@ -529,7 +530,7 @@ await test('push messages, ntfy request and schedule', async () => {
     ['Today, Tue 27.10.'],
   );
   await schedule.tick(new Date('2026-11-01T17:00:00Z')); // Sunday 18:00 in Vienna
-  assert.equal(pushed.at(-1)!.title, 'KW45 is not planned yet');
+  assert.equal(pushed.at(-1)!.title, 'KW45 not planned yet');
   assert.throws(() => configuration({ ENABLE_NOTIFICATIONS: 'true' }), /NTFY_URL/);
 });
 await test('MCP discovery, tool errors and partial context via real SDK client', async (t) => {

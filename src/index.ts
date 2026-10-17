@@ -49,16 +49,13 @@ try {
       data.sync().then(
         () => {
           if (failing)
-            void alert(
-              'Coach data sync recovered',
-              'GitHub and the server checkout are in line again.',
-            );
+            void alert('Data sync recovered', 'GitHub and the server checkout are in line again.');
           failing = false;
         },
         (e: unknown) => {
           const message = e instanceof Error ? e.message : 'unknown error';
           console.error(`Data sync failed: ${message}`);
-          if (!failing) void alert('Coach data sync failed', message, true);
+          if (!failing) void alert('Data sync failed', message, true);
           failing = true;
         },
       );
