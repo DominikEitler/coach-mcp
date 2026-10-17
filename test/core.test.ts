@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { configuration } from '../src/config.js';
 import { DataStore } from '../src/data.js';
-import { Intervals, checkRange } from '../src/intervals.js';
+import { Intervals, checkRange, resetWriteLimit } from '../src/intervals.js';
 import { createServer } from '../src/server.js';
 import { createApp } from '../src/http.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -236,6 +236,81 @@ await test('Intervals responses are reduced to coaching fields without losing va
   });
   await assert.rejects(api.activity('2'), /unexpected response/);
 });
+await test("planned workouts: only the coach's own, inside the window, rate limited", async () => {
+  resetWriteLimit();
+  type Event = Record<string, unknown> & { id: number };
+  const calendar = new Map<number, Event>([
+    [7, { id: 7, category: 'WORKOUT', type: 'Ride', name: 'Own entry', external_id: null }],
+  ]);
+  let nextId = 100;
+  const posted: unknown[] = [];
+  const request: typeof fetch = (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    const match = /events\/(\d+)$/.exec(url.pathname);
+    if (init?.method === 'POST' && url.pathname.endsWith('/events/bulk')) {
+      assert.equal(url.searchParams.get('upsert'), 'true');
+      const body = JSON.parse(init.body as string) as Event[];
+      posted.push(...body);
+      const saved = body.map((event) => {
+        const existing = [...calendar.values()].find((e) => e.external_id === event.external_id);
+        const stored = { ...event, id: existing?.id ?? nextId++ };
+        const steps = String(event.description)
+          .split('\n')
+          .filter((l) => l.startsWith('- '));
+        calendar.set(stored.id, { ...stored, workout_doc: { steps }, moving_time: 600 });
+        return stored;
+      });
+      return Promise.resolve(Response.json(saved));
+    }
+    if (match && init?.method === 'DELETE') {
+      calendar.delete(Number(match[1]));
+      return Promise.resolve(new Response(null, { status: 200 }));
+    }
+    if (match) {
+      const event = calendar.get(Number(match[1]));
+      return Promise.resolve(event ? Response.json(event) : new Response('', { status: 404 }));
+    }
+    return Promise.resolve(new Response('', { status: 500 }));
+  };
+  const day = (offset: number) =>
+    new Date(Date.now() + offset * 86400000).toISOString().slice(0, 10);
+  const run = {
+    date: day(3),
+    type: 'Run' as const,
+    name: 'Easy run',
+    description: '- 40m Z2 Pace',
+  };
+  await assert.rejects(new Intervals('k', '0', request).savePlannedWorkout(run), /disabled/);
+  const api = new Intervals('k', '0', request, true);
+  const created = await api.savePlannedWorkout(run);
+  assert.equal(created.steps, 1);
+  const first = posted[0] as Event;
+  assert.equal(first.category, 'WORKOUT');
+  assert.match(String(first.external_id), /^coach-mcp:/);
+  const moved = await api.savePlannedWorkout({ ...run, id: Number(created.id), date: day(4) });
+  assert.equal(moved.id, created.id);
+  assert.equal(moved.date, day(4));
+  assert.equal((posted[1] as Event).external_id, first.external_id);
+  const group = await api.savePlannedWorkout({
+    ...run,
+    name: 'USI track',
+    description: 'Coached session',
+  });
+  assert.equal(group.steps, 0);
+  assert.ok('note' in group);
+  await assert.rejects(api.savePlannedWorkout({ ...run, id: 7 }), /not created by the coach/);
+  await assert.rejects(api.deletePlannedWorkout(7), /not created by the coach/);
+  assert.equal(calendar.get(7)?.name, 'Own entry');
+  await assert.rejects(api.savePlannedWorkout({ ...run, date: day(-3) }), /from today/);
+  await assert.rejects(api.savePlannedWorkout({ ...run, date: day(120) }), /from today/);
+  const removed = await api.deletePlannedWorkout(Number(created.id));
+  assert.equal(removed.deleted.id, created.id);
+  assert.equal(calendar.has(Number(created.id)), false);
+  resetWriteLimit();
+  for (let i = 0; i < 30; i++) await api.savePlannedWorkout(run);
+  await assert.rejects(api.savePlannedWorkout(run), /limit/);
+  resetWriteLimit();
+});
 await test('MCP discovery, tool errors and partial context via real SDK client', async (t) => {
   const { root } = await fixture(t);
   const server = createServer(configuration({ COACH_DATA_DIR: root }));
@@ -250,6 +325,7 @@ await test('MCP discovery, tool errors and partial context via real SDK client',
   const listed = await client.listTools();
   assert.equal(listed.tools.length, 7);
   assert.ok(!listed.tools.some((v) => v.name === 'update_coaching_document'));
+  assert.ok(!listed.tools.some((v) => v.name === 'save_planned_workout'));
   const result = await client.callTool({
     name: 'get_coaching_context',
     arguments: { oldest: '2026-09-01', newest: '2026-09-07', documents: ['athlete/profile.md'] },

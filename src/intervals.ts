@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 export const date = z
   .string()
@@ -62,6 +63,63 @@ function rows(value: unknown) {
     throw new Error('Intervals.icu returned an unexpected response.');
   return value;
 }
+// Planned workouts the coach may create, change and delete carry this external_id prefix;
+// everything else in the calendar is the athlete's and is never modified.
+export const coachPrefix = 'coach-mcp:';
+export const workoutTypes = [
+  'Run',
+  'Ride',
+  'VirtualRide',
+  'Swim',
+  'OpenWaterSwim',
+  'WeightTraining',
+  'Workout',
+  'Walk',
+  'Yoga',
+] as const;
+export type PlannedWorkout = {
+  id?: number;
+  date: string;
+  type: (typeof workoutTypes)[number];
+  name: string;
+  description: string;
+  indoor?: boolean;
+};
+const writeWindowDays = 92;
+const writesPerHour = 30;
+// Shared by all requests in this process: HTTP mode builds a new client per request.
+const recentWrites: number[] = [];
+function countWrite(now = Date.now()) {
+  while (recentWrites.length && recentWrites[0]! < now - 3600000) recentWrites.shift();
+  if (recentWrites.length >= writesPerHour)
+    throw new Error(`Intervals write limit reached (${writesPerHour} per hour). Try again later.`);
+  recentWrites.push(now);
+}
+export function resetWriteLimit() {
+  recentWrites.length = 0;
+}
+function checkWindow(day: string, today = new Date()) {
+  date.parse(day);
+  const start =
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()) - 86400000;
+  const offset = (Date.parse(day) - start) / 86400000;
+  if (offset < 0 || offset > writeWindowDays + 1)
+    throw new Error(
+      `Planned workouts can only be written from today to ${writeWindowDays} days ahead.`,
+    );
+}
+const summarize = (event: Row) => {
+  const doc = event.workout_doc as { steps?: unknown[] } | null | undefined;
+  return {
+    id: event.id,
+    date: typeof event.start_date_local === 'string' ? event.start_date_local.slice(0, 10) : null,
+    type: event.type,
+    name: event.name,
+    moving_time: event.moving_time ?? null,
+    icu_training_load: event.icu_training_load ?? null,
+    steps: doc?.steps?.length ?? 0,
+  };
+};
 export class IntervalsHttpError extends Error {
   constructor(readonly status: number) {
     super(`Intervals.icu returned HTTP ${status}${status === 429 ? '; retry later' : ''}.`);
@@ -72,8 +130,17 @@ export class Intervals {
     private key?: string,
     private athlete = '0',
     private request: typeof fetch = fetch,
+    private writable = false,
   ) {}
-  async get(path: string, query: Record<string, string> = {}) {
+  get(path: string, query: Record<string, string> = {}) {
+    return this.send('GET', path, query);
+  }
+  private async send(
+    method: 'GET' | 'POST' | 'DELETE',
+    path: string,
+    query: Record<string, string> = {},
+    body?: unknown,
+  ) {
     if (!this.key)
       throw new Error('Intervals.icu is not configured. Set INTERVALS_API_KEY on the server.');
     const url = new URL('https://intervals.icu/api/v1/' + path);
@@ -81,10 +148,13 @@ export class Intervals {
     let response: Response;
     try {
       response = await this.request(url, {
+        method,
         headers: {
           Authorization: 'Basic ' + Buffer.from('API_KEY:' + this.key).toString('base64'),
           Accept: 'application/json',
+          ...(body !== undefined && { 'Content-Type': 'application/json' }),
         },
+        ...(body !== undefined && { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(15000),
         redirect: 'error',
       });
@@ -92,6 +162,7 @@ export class Intervals {
       throw new Error('Intervals.icu request failed or timed out.');
     }
     if (!response.ok) throw new IntervalsHttpError(response.status);
+    if (method === 'DELETE') return null;
     try {
       return (await response.json()) as unknown;
     } catch {
@@ -129,5 +200,72 @@ export class Intervals {
         icu_intervals: rows(intervals).map((row) => omit(row, activityNoise)),
       }),
     };
+  }
+  private async event(id: number) {
+    let event: unknown;
+    try {
+      event = await this.get(`athlete/${this.athlete}/events/${id}`);
+    } catch (e) {
+      if (e instanceof IntervalsHttpError && (e.status === 403 || e.status === 404))
+        throw new Error(`Calendar event ${id} not found.`);
+      throw e;
+    }
+    if (!isRow(event)) throw new Error('Intervals.icu returned an unexpected response.');
+    return event;
+  }
+  private async ownEvent(id: number) {
+    const event = await this.event(id);
+    if (typeof event.external_id !== 'string' || !event.external_id.startsWith(coachPrefix))
+      throw new Error(
+        `Calendar event ${id} was not created by the coach; change it in Intervals instead.`,
+      );
+    return event;
+  }
+  /** Create or update a planned workout owned by the coach, then read it back. */
+  async savePlannedWorkout(workout: PlannedWorkout) {
+    if (!this.writable) throw new Error('Intervals writes are disabled.');
+    checkWindow(workout.date);
+    const externalId =
+      workout.id === undefined
+        ? coachPrefix + randomUUID()
+        : (await this.ownEvent(workout.id)).external_id;
+    countWrite();
+    const saved = rows(
+      await this.send('POST', `athlete/${this.athlete}/events/bulk`, { upsert: 'true' }, [
+        {
+          category: 'WORKOUT',
+          type: workout.type,
+          start_date_local: `${workout.date}T00:00:00`,
+          name: workout.name,
+          description: workout.description,
+          external_id: externalId,
+          ...(workout.indoor !== undefined && { indoor: workout.indoor }),
+        },
+      ]),
+    );
+    const id = saved[0]?.id;
+    if (typeof id !== 'number') throw new Error('Intervals.icu returned an unexpected response.');
+    const result = summarize(await this.event(id));
+    return {
+      ...result,
+      ...(result.steps === 0 && {
+        note: 'Intervals found no workout structure in the description. Expected for unstructured sessions such as group sessions; otherwise check the workout syntax.',
+      }),
+    };
+  }
+  /** Delete a planned workout owned by the coach and confirm it is gone. */
+  async deletePlannedWorkout(id: number) {
+    if (!this.writable) throw new Error('Intervals writes are disabled.');
+    const event = await this.ownEvent(id);
+    countWrite();
+    await this.send('DELETE', `athlete/${this.athlete}/events/${id}`);
+    try {
+      await this.event(id);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('not found'))
+        return { deleted: summarize(event) };
+      throw e;
+    }
+    throw new Error(`Calendar event ${id} still exists after deleting; check it in Intervals.`);
   }
 }

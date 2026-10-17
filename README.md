@@ -40,18 +40,19 @@ Example client configuration (replace paths with absolute paths on your machine)
 
 ## Configuration
 
-| Variable               | Default         | Purpose                                              |
-| ---------------------- | --------------- | ---------------------------------------------------- |
-| `TRANSPORT`            | `stdio`         | Choose `stdio` or `http`                             |
-| `HOST`                 | `127.0.0.1`     | HTTP bind address                                    |
-| `PORT`                 | `3000`          | HTTP port                                            |
-| `MCP_TOKEN`            | Unset           | Required for HTTP, at least 32 characters            |
-| `PUBLIC_URL`           | Unset           | HTTPS public URL used for Host/Origin validation     |
-| `COACH_DATA_DIR`       | `../coach-data` | Data checkout, relative to process working directory |
-| `INTERVALS_API_KEY`    | Unset           | Personal Intervals API key                           |
-| `INTERVALS_ATHLETE_ID` | `0`             | Athlete to query; `0` is the key owner               |
-| `ENABLE_DATA_WRITES`   | `false`         | Register and enable document updates                 |
-| `GIT_AUTO_PUSH`        | `false`         | Fetch/check upstream and push document commits       |
+| Variable                  | Default         | Purpose                                                   |
+| ------------------------- | --------------- | --------------------------------------------------------- |
+| `TRANSPORT`               | `stdio`         | Choose `stdio` or `http`                                  |
+| `HOST`                    | `127.0.0.1`     | HTTP bind address                                         |
+| `PORT`                    | `3000`          | HTTP port                                                 |
+| `MCP_TOKEN`               | Unset           | Required for HTTP, at least 32 characters                 |
+| `PUBLIC_URL`              | Unset           | HTTPS public URL used for Host/Origin validation          |
+| `COACH_DATA_DIR`          | `../coach-data` | Data checkout, relative to process working directory      |
+| `INTERVALS_API_KEY`       | Unset           | Personal Intervals API key                                |
+| `INTERVALS_ATHLETE_ID`    | `0`             | Athlete to query; `0` is the key owner                    |
+| `ENABLE_DATA_WRITES`      | `false`         | Register and enable document updates                      |
+| `GIT_AUTO_PUSH`           | `false`         | Fetch/check upstream and push document commits            |
+| `ENABLE_INTERVALS_WRITES` | `false`         | Register planned-workout writes to the Intervals calendar |
 
 Boolean flags accept only literal `true` or `false`. Use an absolute `COACH_DATA_DIR`
 when an MCP client launches the server from an unspecified working directory.
@@ -59,18 +60,20 @@ when an MCP client launches the server from an unspecified working directory.
 
 ## Tools
 
-| Tool                       | Purpose                                          |
-| -------------------------- | ------------------------------------------------ |
-| `list_coaching_documents`  | Discover coaching Markdown                       |
-| `read_coaching_document`   | Read content and its revision hash               |
-| `get_recent_training`      | Completed activity summaries                     |
-| `get_activity`             | Single activity including intervals              |
-| `get_wellness`             | Wellness and available load metrics              |
-| `get_calendar`             | Planned workouts and events                      |
-| `get_coaching_context`     | Combine selected documents and three API sources |
-| `update_coaching_document` | Optional, agreed document update with Git commit |
+| Tool                       | Purpose                                                           |
+| -------------------------- | ----------------------------------------------------------------- |
+| `list_coaching_documents`  | Discover coaching Markdown                                        |
+| `read_coaching_document`   | Read content and its revision hash                                |
+| `get_recent_training`      | Completed activity summaries                                      |
+| `get_activity`             | Single activity including intervals                               |
+| `get_wellness`             | Wellness and available load metrics                               |
+| `get_calendar`             | Planned workouts and events                                       |
+| `get_coaching_context`     | Combine selected documents and three API sources                  |
+| `update_coaching_document` | Optional, agreed document update with Git commit                  |
+| `save_planned_workout`     | Optional: create or change an agreed planned workout in Intervals |
+| `delete_planned_workout`   | Optional: delete a planned workout the coach created              |
 
-The update tool is registered only when `ENABLE_DATA_WRITES=true`. The server also
+The update tool is registered only when `ENABLE_DATA_WRITES=true`, the planned-workout tools only when `ENABLE_INTERVALS_WRITES=true`. The server also
 sends client instructions and read/write tool annotations; these guide the client but
 are not an approval mechanism.
 
@@ -136,6 +139,27 @@ It never merges, rebases, resets or force-pushes. A failed push after a write re
 logged as `Data sync failed: ...`. A crash can leave a lock, a dirty file or an unpushed
 commit: inspect the repository before removing a stale lock.
 
+## Planned workouts in Intervals
+
+With `ENABLE_INTERVALS_WRITES=true`, `save_planned_workout` and `delete_planned_workout`
+write to the athlete's Intervals.icu calendar with the personal API key, from where
+Intervals syncs planned workouts to Garmin if that is enabled in Intervals.
+
+- Workouts are written with `POST /athlete/0/events/bulk?upsert=true` and an `external_id`
+  starting with `coach-mcp:`. Changing a workout, including its date, reuses that id, so
+  it updates the entry instead of creating a duplicate.
+- Only events with that prefix can be changed or deleted; the athlete's own entries,
+  races and notes are refused.
+- Only category `WORKOUT`, dated from today to 92 days ahead (athlete-local dates).
+- At most 30 Intervals writes per hour per server process.
+- Every write reads the event back and returns date, duration, load and the number of
+  structured steps; `steps: 0` means Intervals recognised no workout structure.
+- The description uses Intervals workout text (for example `- 10m 5:05-5:10/km Pace`).
+
+Write access is covered by the
+[Intervals.icu API terms](https://forum.intervals.icu/t/intervals-icu-api-terms-and-conditions/114087)
+(any lawful purpose; no API abuse; Garmin attribution when showing Garmin-derived data).
+
 ## HTTP and deployment
 
 Set `TRANSPORT=http`, `MCP_TOKEN` (at least 32 characters), and, for hosted use,
@@ -184,15 +208,15 @@ These checks run locally; no CI pipeline or Git hooks are installed.
 npm run check
 ```
 
-The ten tests use a temporary Git repository and mocked Intervals HTTP responses,
+The eleven tests use a temporary Git repository and mocked Intervals HTTP responses,
 plus real MCP clients over in-memory, stdio and HTTP transports. They cover
 configuration, date validation, revisions and filesystem boundaries, concurrent and
-protected writes, upstream synchronization, Intervals requests and response trimming, and MCP discovery. They require no credentials.
+protected writes, upstream synchronization, Intervals requests and response trimming,
+planned-workout writes (ownership, date window, rate limit), and MCP discovery. They require no credentials.
 Live Intervals calls and VPS deployment must be verified after configuration.
 
-This first version intentionally exposes Intervals reads only. Planned workout
-writes, OAuth login, webhooks, power curves and automated coaching decisions are
-not implemented. It does not run or pay for an LLM: the connected AI client chooses
+Intervals writes are limited to planned workouts the coach created. OAuth login,
+webhooks, power curves and automated coaching decisions are not implemented. It does not run or pay for an LLM: the connected AI client chooses
 and calls these tools.
 
 Sources: [official MCP TypeScript SDK](https://ts.sdk.modelcontextprotocol.io/server)

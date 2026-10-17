@@ -15,6 +15,7 @@ export function configuration(env = process.env) {
       COACH_DATA_DIR: z.string().default('../coach-data'),
       ENABLE_DATA_WRITES: flag,
       GIT_AUTO_PUSH: flag,
+      ENABLE_INTERVALS_WRITES: flag,
       INTERVALS_API_KEY: z.string().min(1).optional(),
       INTERVALS_ATHLETE_ID: z
         .string()
