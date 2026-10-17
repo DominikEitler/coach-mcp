@@ -30,6 +30,18 @@ const join = (...parts: string[]) => parts.filter(Boolean).join(' · ');
 const text = (value: unknown, fallback = '') =>
   typeof value === 'string' && value ? value : fallback;
 const marks: Record<string, string> = { done: '✓', shortened: '↘', missed: '✗', open: '✗' };
+/** Emoji for an Intervals sport type, shown at the start of each line. */
+export function sportEmoji(type: unknown) {
+  const t = typeof type === 'string' ? type : '';
+  if (/Run/.test(t)) return '🏃';
+  if (/Ride|Cyclocross/.test(t)) return '🚴';
+  if (/Swim/.test(t)) return '🏊';
+  if (/Weight|Strength/.test(t)) return '🏋️';
+  if (/Yoga/.test(t)) return '🧘';
+  if (/Walk|Hike/.test(t)) return '🚶';
+  if (/Ski/.test(t)) return '⛷️';
+  return '•';
+}
 
 /** Morning push: today's planned sessions, or a rest day, plus last night's sleep. */
 export function morning(day: DayView): Message {
@@ -41,11 +53,15 @@ export function morning(day: DayView): Message {
       : '';
   const rhr = typeof wellness.restingHR === 'number' ? `resting HR ${wellness.restingHR}` : '';
   const sessions = planned.map(
-    (p) => `• ${join(text(p.name, text(p.type, 'Session')), minutes(p.moving_time))}`,
+    (p) =>
+      `${sportEmoji(p.type)} ${join(text(p.name, text(p.type, 'Session')), minutes(p.moving_time))}`,
   );
   return {
     title: `Today, ${label(day.date)}`,
-    body: [...(sessions.length ? sessions : ['Rest day']), join(sleep, rhr)]
+    body: [
+      ...(sessions.length ? sessions : ['Rest day']),
+      sleep || rhr ? `😴 ${join(sleep, rhr)}` : '',
+    ]
       .filter(Boolean)
       .join('\n'),
     question: sessions.length ? "What's on today?" : "It's a rest day. Anything to adjust?",
@@ -62,10 +78,11 @@ export function evening(day: DayView): Message | null {
   const lines = [
     ...planned.map(
       (p) =>
-        `${marks[p.status ?? ''] ?? '•'} ${join(text(p.name, text(p.type, 'Session')), p.status === 'open' ? 'not recorded' : (p.status ?? ''))}`,
+        `${sportEmoji(p.type)} ${marks[p.status ?? ''] ?? '•'} ${join(text(p.name, text(p.type, 'Session')), p.status === 'open' ? 'not recorded' : (p.status ?? ''))}`,
     ),
     ...extra.map(
-      (a) => `+ ${join(text(a.type, 'Activity'), km(a.distance), minutes(a.moving_time))}`,
+      (a) =>
+        `${sportEmoji(a.type)} + ${join(text(a.type, 'Activity'), km(a.distance), minutes(a.moving_time))}`,
     ),
   ];
   const missed = planned.some((p) => p.status === 'open' || p.status === 'missed');

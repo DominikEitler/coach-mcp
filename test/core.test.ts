@@ -456,14 +456,17 @@ await test('push messages, ntfy request and schedule', async () => {
   };
   const am = morning(workday);
   assert.equal(am.title, 'Today, Tue 27.10.');
-  assert.equal(am.body, '• Easy run · 45 min\n• USI cycling · 120 min\nSleep 7:12 · resting HR 46');
+  assert.equal(
+    am.body,
+    '🏃 Easy run · 45 min\n🚴 USI cycling · 120 min\n😴 Sleep 7:12 · resting HR 46',
+  );
   const rest = morning({ ...base, planned: [], activities: [], wellness: null });
   assert.equal(rest.body, 'Rest day');
   const pm = evening(workday)!;
   assert.match(pm.title, /not everything done/);
   assert.equal(
     pm.body,
-    '✓ Easy run · done\n✗ USI cycling · not recorded\n+ Swim · 1,5 km · 30 min',
+    '🏃 ✓ Easy run · done\n🚴 ✗ USI cycling · not recorded\n🏊 + Swim · 1,5 km · 30 min',
   );
   assert.equal(evening({ ...base, planned: [], activities: [], wellness: null }), null);
   const emptyWeek = {
