@@ -16,6 +16,17 @@ export function configuration(env = process.env) {
       ENABLE_DATA_WRITES: flag,
       GIT_AUTO_PUSH: flag,
       ENABLE_INTERVALS_WRITES: flag,
+      ATHLETE_TIMEZONE: z
+        .string()
+        .default('Europe/Vienna')
+        .refine((zone) => {
+          try {
+            new Intl.DateTimeFormat('en', { timeZone: zone });
+            return true;
+          } catch {
+            return false;
+          }
+        }, 'Use an IANA time zone such as Europe/Vienna'),
       INTERVALS_API_KEY: z.string().min(1).optional(),
       INTERVALS_ATHLETE_ID: z
         .string()

@@ -10,6 +10,7 @@ import { DataStore } from '../src/data.js';
 import { Intervals, checkRange, resetWriteLimit } from '../src/intervals.js';
 import { createServer } from '../src/server.js';
 import { createApp } from '../src/http.js';
+import { Coaching, isoWeek, localDate } from '../src/coaching.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -311,6 +312,127 @@ await test("planned workouts: only the coach's own, inside the window, rate limi
   await assert.rejects(api.savePlannedWorkout(run), /limit/);
   resetWriteLimit();
 });
+await test('calendar weeks and athlete-local dates', () => {
+  assert.deepEqual(isoWeek('2026-10-17'), {
+    year: 2026,
+    week: 42,
+    label: '2026-KW42',
+    monday: '2026-10-12',
+    sunday: '2026-10-18',
+  });
+  assert.equal(isoWeek('2027-01-01').label, '2026-KW53');
+  assert.equal(isoWeek('2024-12-30').label, '2025-KW01');
+  assert.equal(localDate('Europe/Vienna', new Date('2026-10-17T22:30:00Z')), '2026-10-18');
+  assert.throws(() => isoWeek('2026-02-30'));
+});
+await test('week and day views match plan with activities', async (t) => {
+  const { root } = await fixture(t);
+  await mkdir(join(root, 'weeks'));
+  await mkdir(join(root, 'blocks'));
+  await writeFile(join(root, 'weeks/2026-KW02.md'), '# KW02 2026\n');
+  await writeFile(join(root, 'blocks/current.md'), '# Current block\n');
+  const events = [
+    {
+      id: 1,
+      category: 'WORKOUT',
+      type: 'Run',
+      name: 'Easy',
+      start_date_local: '2026-01-05T00:00:00',
+      moving_time: 3600,
+      icu_training_load: 40,
+      external_id: 'coach-mcp:a',
+      workout_doc: { steps: [{}, {}] },
+    },
+    {
+      id: 2,
+      category: 'WORKOUT',
+      type: 'Ride',
+      name: 'USI',
+      start_date_local: '2026-01-06T00:00:00',
+      moving_time: 3600,
+      icu_training_load: 60,
+    },
+    {
+      id: 3,
+      category: 'WORKOUT',
+      type: 'Swim',
+      name: 'Swim',
+      start_date_local: '2026-01-07T00:00:00',
+      moving_time: 1800,
+    },
+    { id: 4, category: 'NOTE', name: 'Travel', start_date_local: '2026-01-07T00:00:00' },
+  ];
+  const activities = [
+    {
+      id: 'i1',
+      type: 'Run',
+      start_date_local: '2026-01-05T07:00:00',
+      moving_time: 3500,
+      icu_training_load: 38,
+    },
+    {
+      id: 'i2',
+      type: 'Ride',
+      start_date_local: '2026-01-06T18:00:00',
+      moving_time: 1800,
+      icu_training_load: 25,
+    },
+    {
+      id: 'i3',
+      type: 'Run',
+      start_date_local: '2026-01-08T18:00:00',
+      moving_time: 2400,
+      icu_training_load: 30,
+    },
+  ];
+  const request: typeof fetch = (input) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    const oldest = url.searchParams.get('oldest') ?? '';
+    const newest = (url.searchParams.get('newest') ?? '') + 'T99';
+    const inRange = (rows: { start_date_local?: string; id?: unknown }[]) =>
+      rows.filter(
+        (r) => (r.start_date_local ?? '') >= oldest && (r.start_date_local ?? '') <= newest,
+      );
+    if (url.pathname.endsWith('/events')) return Promise.resolve(Response.json(inRange(events)));
+    if (url.pathname.endsWith('/activities'))
+      return Promise.resolve(Response.json(inRange(activities)));
+    if (url.pathname.endsWith('/wellness'))
+      return Promise.resolve(
+        Response.json([{ id: '2026-01-05', restingHR: 46, hrv: 60, locked: false }]),
+      );
+    if (url.pathname.includes('/activity/'))
+      return Promise.resolve(
+        Response.json({ id: 'i1', icu_intervals: [{ type: 'WORK', moving_time: 3500 }] }),
+      );
+    return Promise.resolve(new Response('', { status: 404 }));
+  };
+  const coaching = new Coaching(
+    new Intervals('k', '0', request),
+    new DataStore(root),
+    'Europe/Vienna',
+  );
+  const week = await coaching.week('2026-01-07');
+  assert.equal(week.week, '2026-KW02');
+  assert.equal((week.week_document as { content: string }).content, '# KW02 2026\n');
+  assert.equal((week.current_block as { content: string }).content, '# Current block\n');
+  const [mon, tue, wed, thu] = week.days;
+  assert.equal(mon!.planned[0]!.status, 'done');
+  assert.equal(mon!.planned[0]!.by_coach, true);
+  assert.equal(mon!.planned[0]!.steps, 2);
+  assert.equal(tue!.planned[0]!.status, 'shortened');
+  assert.equal(wed!.planned[0]!.status, 'missed');
+  assert.equal(wed!.notes[0]!.name, 'Travel');
+  assert.equal(thu!.planned.length, 0);
+  assert.equal(thu!.activities[0]!.matched, false);
+  assert.equal(week.totals.run!.done_time, 5900);
+  assert.equal(week.totals.run!.planned_time, 3600);
+  assert.deepEqual(week.wellness, [{ id: '2026-01-05', restingHR: 46, hrv: 60 }]);
+  const monday = await coaching.day('2026-01-05');
+  assert.equal(monday.weekday, 'Monday');
+  assert.equal((monday.planned as { status: string }[])[0]!.status, 'done');
+  const activity = (monday.activities as { detail?: { icu_intervals: unknown[] } }[])[0]!;
+  assert.equal(activity.detail?.icu_intervals.length, 1);
+});
 await test('MCP discovery, tool errors and partial context via real SDK client', async (t) => {
   const { root } = await fixture(t);
   const server = createServer(configuration({ COACH_DATA_DIR: root }));
@@ -323,7 +445,8 @@ await test('MCP discovery, tool errors and partial context via real SDK client',
     await server.close();
   });
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 7);
+  assert.equal(listed.tools.length, 9);
+  assert.ok(listed.tools.some((v) => v.name === 'get_week'));
   assert.ok(!listed.tools.some((v) => v.name === 'update_coaching_document'));
   assert.ok(!listed.tools.some((v) => v.name === 'save_planned_workout'));
   const result = await client.callTool({
@@ -378,7 +501,7 @@ await test('HTTP authentication, origin checks and MCP initialize/discovery', as
       requestInit: { headers: { Authorization: `Bearer ${token}` } },
     }),
   );
-  assert.equal((await client.listTools()).tools.length, 7);
+  assert.equal((await client.listTools()).tools.length, 9);
   await client.close();
 });
 await test('built entry point supports stdio without stdout noise', async (t) => {
@@ -393,5 +516,5 @@ await test('built entry point supports stdio without stdout noise', async (t) =>
     }),
   );
   t.after(() => client.close());
-  assert.equal((await client.listTools()).tools.length, 7);
+  assert.equal((await client.listTools()).tools.length, 9);
 });

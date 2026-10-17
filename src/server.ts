@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Config } from './config.js';
 import { DataStore } from './data.js';
+import { Coaching } from './coaching.js';
 import { Intervals, rangeShape, checkRange, date, workoutTypes } from './intervals.js';
 export function createServer(
   config: Config,
@@ -95,6 +96,27 @@ export function createServer(
       annotations: read,
     },
     ({ id }) => guard(() => api.activity(id)),
+  );
+  const coaching = new Coaching(api, data, config.ATHLETE_TIMEZONE);
+  server.registerTool(
+    'get_day',
+    {
+      description:
+        "One day (default: today in the athlete's time zone): planned sessions from the Intervals calendar with status (done, shortened, missed, open, upcoming), the day's activities with interval detail, and wellness. Use for 'what's on today' and for reviewing today's activity.",
+      inputSchema: { date: date.optional() },
+      annotations: read,
+    },
+    ({ date: value }) => guard(() => coaching.day(value)),
+  );
+  server.registerTool(
+    'get_week',
+    {
+      description:
+        "One calendar week, Monday to Sunday (default: the current week): the week file, the current block pointer, plan versus actual for each day with status, totals per sport (planned and done time and load), and daily wellness. Use for 'what's on this week', weekly reviews, and, with a date in next week, as the basis for planning it.",
+      inputSchema: { date: date.optional() },
+      annotations: read,
+    },
+    ({ date: value }) => guard(() => coaching.week(value)),
   );
   server.registerTool(
     'get_coaching_context',

@@ -53,6 +53,7 @@ Example client configuration (replace paths with absolute paths on your machine)
 | `ENABLE_DATA_WRITES`      | `false`         | Register and enable document updates                      |
 | `GIT_AUTO_PUSH`           | `false`         | Fetch/check upstream and push document commits            |
 | `ENABLE_INTERVALS_WRITES` | `false`         | Register planned-workout writes to the Intervals calendar |
+| `ATHLETE_TIMEZONE`        | `Europe/Vienna` | Time zone for "today" in `get_day` and `get_week`         |
 
 Boolean flags accept only literal `true` or `false`. Use an absolute `COACH_DATA_DIR`
 when an MCP client launches the server from an unspecified working directory.
@@ -60,18 +61,20 @@ when an MCP client launches the server from an unspecified working directory.
 
 ## Tools
 
-| Tool                       | Purpose                                                           |
-| -------------------------- | ----------------------------------------------------------------- |
-| `list_coaching_documents`  | Discover coaching Markdown                                        |
-| `read_coaching_document`   | Read content and its revision hash                                |
-| `get_recent_training`      | Completed activity summaries                                      |
-| `get_activity`             | Single activity including intervals                               |
-| `get_wellness`             | Wellness and available load metrics                               |
-| `get_calendar`             | Planned workouts and events                                       |
-| `get_coaching_context`     | Combine selected documents and three API sources                  |
-| `update_coaching_document` | Optional, agreed document update with Git commit                  |
-| `save_planned_workout`     | Optional: create or change an agreed planned workout in Intervals |
-| `delete_planned_workout`   | Optional: delete a planned workout the coach created              |
+| Tool                       | Purpose                                                                     |
+| -------------------------- | --------------------------------------------------------------------------- |
+| `list_coaching_documents`  | Discover coaching Markdown                                                  |
+| `read_coaching_document`   | Read content and its revision hash                                          |
+| `get_recent_training`      | Completed activity summaries                                                |
+| `get_activity`             | Single activity including intervals                                         |
+| `get_wellness`             | Wellness and available load metrics                                         |
+| `get_calendar`             | Planned workouts and events                                                 |
+| `get_coaching_context`     | Combine selected documents and three API sources                            |
+| `get_day`                  | One day: planned vs done with status, activity detail, wellness             |
+| `get_week`                 | One calendar week: week file, block pointer, plan vs actual per day, totals |
+| `update_coaching_document` | Optional, agreed document update with Git commit                            |
+| `save_planned_workout`     | Optional: create or change an agreed planned workout in Intervals           |
+| `delete_planned_workout`   | Optional: delete a planned workout the coach created                        |
 
 The update tool is registered only when `ENABLE_DATA_WRITES=true`, the planned-workout tools only when `ENABLE_INTERVALS_WRITES=true`. The server also
 sends client instructions and read/write tool annotations; these guide the client but
@@ -138,6 +141,22 @@ It never merges, rebases, resets or force-pushes. A failed push after a write re
 `synced:false`; the commit stays local and the next sync retries it. Sync failures are
 logged as `Data sync failed: ...`. A crash can leave a lock, a dirty file or an unpushed
 commit: inspect the repository before removing a stale lock.
+
+## Day and week views
+
+`get_day` and `get_week` combine the sources the coach needs most often, so common
+questions take one call. They default to today and the current calendar week (KW) in
+`ATHLETE_TIMEZONE`.
+
+- Planned sessions come from the Intervals calendar (workouts and races); notes are listed
+  separately. Each planned session is matched with an activity of the same sport on that
+  day and gets a status: `done`, `shortened` (under 70 % of the planned time), `missed`,
+  `open` (today, not done yet) or `upcoming`. Activities without a planned session are
+  marked `matched: false`.
+- `get_day` adds interval detail for up to three activities and the day's wellness.
+- `get_week` adds the week file `weeks/<YYYY>-KW<ww>.md`, `blocks/current.md`, totals per
+  sport (planned and done time and load) and daily wellness. Each source reports its own
+  availability.
 
 ## Planned workouts in Intervals
 
@@ -208,11 +227,12 @@ These checks run locally; no CI pipeline or Git hooks are installed.
 npm run check
 ```
 
-The eleven tests use a temporary Git repository and mocked Intervals HTTP responses,
+The thirteen tests use a temporary Git repository and mocked Intervals HTTP responses,
 plus real MCP clients over in-memory, stdio and HTTP transports. They cover
 configuration, date validation, revisions and filesystem boundaries, concurrent and
 protected writes, upstream synchronization, Intervals requests and response trimming,
-planned-workout writes (ownership, date window, rate limit), and MCP discovery. They require no credentials.
+planned-workout writes (ownership, date window, rate limit), calendar weeks and the day
+and week views, and MCP discovery. They require no credentials.
 Live Intervals calls and VPS deployment must be verified after configuration.
 
 Intervals writes are limited to planned workouts the coach created. OAuth login,
